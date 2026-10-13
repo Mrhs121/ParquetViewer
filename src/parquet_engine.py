@@ -7,6 +7,13 @@ Powered by DuckDB, PyArrow, and FastAvro.
 
 import sys
 import os
+
+# Support bundled python dependencies inside App Bundle
+_bundle_dir = os.path.dirname(os.path.abspath(__file__))
+_bundled_lib = os.path.join(_bundle_dir, "python_lib")
+if os.path.isdir(_bundled_lib) and _bundled_lib not in sys.path:
+    sys.path.insert(0, _bundled_lib)
+
 import glob
 import json
 import time

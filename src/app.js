@@ -175,6 +175,15 @@ function reloadCurrentFile() {
   loadParquetFile(currentFilePath);
 }
 
+// Load Built-in Sample Dataset
+function loadSample(name) {
+  sendToNative("getSamplePath", { name: name }).then(path => {
+    if (path) loadParquetFile(path);
+  }).catch(err => {
+    showToast("无法加载内置示例: " + err.message, "warning");
+  });
+}
+
 // Core Load Function
 async function loadParquetFile(path) {
   const loadId = ++fileLoadId;

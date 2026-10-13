@@ -53,10 +53,39 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
             handleOpenFileDialog(reqId: reqId)
         case "exportDialog":
             handleExportDialog(reqId: reqId, dict: dict)
+        case "getSamplePath":
+            handleGetSamplePath(reqId: reqId, dict: dict)
         case "info", "page", "query":
             handleEngineCommand(action: action, reqId: reqId, dict: dict)
         default:
             sendResponse(reqId: reqId, success: false, dataJson: "{}", error: "未知操作: \(action)")
+        }
+    }
+
+    private func handleGetSamplePath(reqId: String, dict: [String: Any]) {
+        guard let name = dict["name"] as? String else {
+            sendResponse(reqId: reqId, success: false, dataJson: "null", error: "缺少示例名称")
+            return
+        }
+        var resolvedPath: String?
+        if let resPath = Bundle.main.resourcePath {
+            let candidate = "\(resPath)/samples/\(name)"
+            if FileManager.default.fileExists(atPath: candidate) {
+                resolvedPath = candidate
+            }
+        }
+        if resolvedPath == nil {
+            // Check development path
+            let devCandidate = "/Users/huangsheng/codes/ParquetViewer/assets/samples/\(name)"
+            if FileManager.default.fileExists(atPath: devCandidate) {
+                resolvedPath = devCandidate
+            }
+        }
+
+        if let validPath = resolvedPath {
+            sendResponse(reqId: reqId, success: true, dataJson: jsonString(validPath))
+        } else {
+            sendResponse(reqId: reqId, success: false, dataJson: "null", error: "未找到内置示例: \(name)")
         }
     }
 

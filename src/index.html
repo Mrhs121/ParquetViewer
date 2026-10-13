@@ -1381,20 +1381,14 @@
           <div class="demo-buttons-row">
             <div class="demo-buttons-title">快速体验内置测试数据集</div>
             <div class="demo-btn-group">
-              <button class="btn-demo" onclick="loadParquetFile('/Users/huangsheng/Documents/Codex/2026-10-13/ni-y/outputs/iceberg-partition-demo/warehouse/demo/partitioned/metadata/86b2d965-78cc-4a0f-ac6f-73e90976463e-m0.avro')">
+              <button class="btn-demo" onclick="loadSample('iceberg_manifest.avro')">
                 <span>🧊</span> Iceberg 清单 (m0.avro)
               </button>
-              <button class="btn-demo" onclick="loadParquetFile('/Users/huangsheng/Documents/Codex/2026-10-13/ni-y/outputs/iceberg-partition-demo/warehouse/demo/partitioned/metadata/snap-7973159704479772107-0-86b2d965-78cc-4a0f-ac6f-73e90976463e.avro')">
+              <button class="btn-demo" onclick="loadSample('iceberg_snapshot.avro')">
                 <span>🧊</span> Iceberg 快照清单 (snap.avro)
               </button>
-              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/spark_dir_test.parquet')">
-                <span>📁</span> Spark 多分片目录 (part-*.parquet)
-              </button>
-              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/large_test.parquet')">
-                <span>📊</span> 10 万行数据集 (4 列)
-              </button>
-              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/sample_test.parquet')">
-                <span>🧪</span> 嵌套类型 / 数组数据集
+              <button class="btn-demo" onclick="loadSample('sample.parquet')">
+                <span>📊</span> 示例 Parquet 数据集
               </button>
             </div>
           </div>
