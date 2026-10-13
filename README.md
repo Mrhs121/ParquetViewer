@@ -17,6 +17,50 @@
 
 ---
 
+## 🖼️ 界面预览 (Screenshots)
+
+### 1. 欢迎首页与拖拽直开 (Welcome & Drop Zone)
+> 支持拖拽单个文件、整个 Spark 多分片目录，或一键体验内置测试集。
+
+![Welcome Screen](assets/screenshots/01_welcome.png)
+
+---
+
+### 2. Iceberg Manifest 清单与关联文件一键穿透 (Iceberg Manifest & File Jump)
+> 自动解析 Iceberg 快照、序列号与嵌套分区结构，点击关联的 Parquet 数据文件路径即可一键穿透打开！
+
+![Iceberg Manifest](assets/screenshots/02_iceberg_manifest.png)
+
+---
+
+### 3. 百万级数据极速分页与检索 (Large Dataset Preview)
+> 25 万行数据集打开渲染仅需 57ms，列宽自适应，支持全列搜索与列点击快速排序。
+
+![Data Preview](assets/screenshots/03_data_preview.png)
+
+---
+
+### 4. 字段结构与 DDL 逆向还原 (Schema View & DDL)
+> 自动解析物理存储编码与逻辑类型，并实时生成规范的 Spark SQL / Iceberg SQL 建表 DDL 与 PySpark 代码。
+
+![Schema View](assets/screenshots/04_schema_view.png)
+
+---
+
+### 5. DuckDB 交互式 SQL 分析引擎 (DuckDB SQL Studio)
+> 毫秒级执行任意复杂 SQL 查询，支持直接查询嵌套 Struct 属性，支持结果导出为 CSV / JSON / Parquet。
+
+![DuckDB SQL Studio](assets/screenshots/05_duckdb_sql.png)
+
+---
+
+### 6. 文件元数据看板 (File Metadata & Statistics)
+> 详细呈现磁盘大小、总行数、列数、Parquet Row Groups、压缩算法与 Spark/Iceberg 附加元数据。
+
+![Metadata View](assets/screenshots/06_metadata_view.png)
+
+---
+
 ## ✨ 核心特性
 
 - **🚀 毫秒级极速渲染**：基于 DuckDB 与 PyArrow，百万行数据集按需分页、列宽自适应，丝滑流畅。
