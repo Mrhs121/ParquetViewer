@@ -75,10 +75,18 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
             }
         }
         if resolvedPath == nil {
-            // Check development path
-            let devCandidate = "/Users/huangsheng/codes/ParquetViewer/assets/samples/\(name)"
-            if FileManager.default.fileExists(atPath: devCandidate) {
-                resolvedPath = devCandidate
+            // Dynamic development path candidates (relative to executable or current working directory)
+            let execDir = Bundle.main.bundleURL.deletingLastPathComponent().path
+            let devCandidates = [
+                "\(execDir)/assets/samples/\(name)",
+                "\(execDir)/../assets/samples/\(name)",
+                "\(FileManager.default.currentDirectoryPath)/assets/samples/\(name)"
+            ]
+            for c in devCandidates {
+                if FileManager.default.fileExists(atPath: c) {
+                    resolvedPath = c
+                    break
+                }
             }
         }
 
@@ -196,14 +204,19 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
         // Locate parquet_engine.py
         var scriptPath = Bundle.main.path(forResource: "parquet_engine", ofType: "py")
         if scriptPath == nil {
-            // Check relative to current working directory or executable
+            // Check relative to executable or current working directory
             let execDir = Bundle.main.bundleURL.deletingLastPathComponent().path
-            let candidate1 = "\(execDir)/parquet_engine.py"
-            let candidate2 = "/Users/huangsheng/codes/ParquetViewer/src/parquet_engine.py"
-            if FileManager.default.fileExists(atPath: candidate1) {
-                scriptPath = candidate1
-            } else if FileManager.default.fileExists(atPath: candidate2) {
-                scriptPath = candidate2
+            let candidates = [
+                "\(execDir)/parquet_engine.py",
+                "\(execDir)/src/parquet_engine.py",
+                "\(FileManager.default.currentDirectoryPath)/src/parquet_engine.py",
+                "\(FileManager.default.currentDirectoryPath)/parquet_engine.py"
+            ]
+            for c in candidates {
+                if FileManager.default.fileExists(atPath: c) {
+                    scriptPath = c
+                    break
+                }
             }
         }
 
@@ -433,11 +446,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         if let htmlPath = Bundle.main.path(forResource: "index", ofType: "html") {
             let url = URL(fileURLWithPath: htmlPath)
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
-        } else {
-            // Check current source folder for development
-            let devPath = "/Users/huangsheng/codes/ParquetViewer/src/index.html"
-            let url = URL(fileURLWithPath: devPath)
-            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            return
+        }
+
+        // Check relative to executable or current working directory for development
+        let execDir = Bundle.main.bundleURL.deletingLastPathComponent().path
+        let candidates = [
+            "\(execDir)/index.html",
+            "\(execDir)/src/index.html",
+            "\(FileManager.default.currentDirectoryPath)/src/index.html",
+            "\(FileManager.default.currentDirectoryPath)/index.html"
+        ]
+        for c in candidates {
+            if FileManager.default.fileExists(atPath: c) {
+                let url = URL(fileURLWithPath: c)
+                webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+                return
+            }
         }
     }
 
