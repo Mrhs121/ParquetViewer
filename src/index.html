@@ -1,0 +1,1668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parquet QuickView</title>
+  <style>
+    :root {
+      --bg-primary: #1e1e24;
+      --bg-secondary: #282830;
+      --bg-sidebar: #22222a;
+      --bg-tertiary: #32323e;
+      --bg-card: #25252f;
+      --bg-hover: #383846;
+      --bg-active: #404052;
+      --text-main: #f0f0f5;
+      --text-muted: #9a9ab0;
+      --text-dim: #6c6c82;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --accent-subtle: rgba(59, 130, 246, 0.15);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-focus: #3b82f6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --code-bg: #18181f;
+      --zebra-bg: rgba(255, 255, 255, 0.02);
+      --font-mono: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.25);
+      --shadow-md: 0 4px 20px rgba(0,0,0,0.35);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f8fafc;
+        --bg-sidebar: #f1f5f9;
+        --bg-tertiary: #e2e8f0;
+        --bg-card: #ffffff;
+        --bg-hover: #e2e8f0;
+        --bg-active: #cbd5e1;
+        --text-main: #0f172a;
+        --text-muted: #475569;
+        --text-dim: #94a3b8;
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --accent-subtle: rgba(37, 99, 235, 0.1);
+        --border-color: #cbd5e1;
+        --border-focus: #2563eb;
+        --code-bg: #f8fafc;
+        --zebra-bg: #f8fafc;
+        --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
+        --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Top Navigation Header (Shown when a file is open) */
+    header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+
+    .header-left {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .btn-icon {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      font-size: 13px;
+    }
+    .btn-icon:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+    .btn-icon.active {
+      background: var(--accent-subtle);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .file-meta-header {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .file-badge-icon {
+      width: 32px;
+      height: 32px;
+      background: var(--accent-subtle);
+      color: var(--accent);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .file-details {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .file-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .file-title {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 500px;
+    }
+
+    .file-subtext {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 260px;
+    }
+
+    .pill-badge {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 7px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 500;
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .pill-badge.accent {
+      background: var(--accent-subtle);
+      color: var(--accent);
+    }
+    .pill-badge.iceberg {
+      background: rgba(6, 182, 212, 0.15);
+      color: #06b6d4;
+      border: 1px solid rgba(6, 182, 212, 0.28);
+    }
+    .pill-badge.avro {
+      background: rgba(168, 85, 247, 0.15);
+      color: #a855f7;
+      border: 1px solid rgba(168, 85, 247, 0.28);
+    }
+
+    .file-badge-icon.iceberg {
+      background: rgba(6, 182, 212, 0.18);
+      color: #06b6d4;
+      font-size: 15px;
+    }
+    .file-badge-icon.avro {
+      background: rgba(168, 85, 247, 0.18);
+      color: #a855f7;
+    }
+
+    .cell-file-link {
+      color: var(--accent);
+      text-decoration: underline;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .cell-file-link:hover {
+      color: var(--accent-hover);
+    }
+
+    /* Tabs */
+    .tabs-nav {
+      display: flex;
+      background: var(--bg-tertiary);
+      padding: 3px;
+      border-radius: var(--radius-md);
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      background: var(--bg-secondary);
+      color: var(--text-main);
+      font-weight: 600;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Header Actions */
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 5px 11px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: transparent;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Main App Body Split (Sidebar + Content) */
+    .app-body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Left Sidebar */
+    .sidebar {
+      width: 240px;
+      min-width: 200px;
+      max-width: 320px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+      transition: margin-left 0.2s ease;
+    }
+
+    .sidebar.collapsed {
+      margin-left: -241px;
+    }
+
+    .sidebar-section {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sidebar-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .sidebar-search {
+      width: 100%;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      font-size: 11px;
+      color: var(--text-main);
+      outline: none;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .sidebar-search:focus {
+      border-color: var(--border-focus);
+    }
+
+    .sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .sidebar-item {
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .sidebar-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .sidebar-item-name {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidebar-part-item {
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 11px;
+      cursor: default;
+    }
+    .sidebar-part-name {
+      font-family: var(--font-mono);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-main);
+    }
+    .sidebar-part-size {
+      color: var(--text-dim);
+      font-size: 10px;
+    }
+
+    /* Content Area */
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .tab-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+      height: 100%;
+    }
+
+    .tab-panel.active {
+      display: flex;
+    }
+
+    /* =========================================
+       Welcome Screen (Professional 2-Column Layout)
+       ========================================= */
+    .welcome-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      height: 100%;
+      background: var(--bg-primary);
+    }
+
+    .welcome-left-pane {
+      width: 340px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      padding: 24px 20px;
+      gap: 20px;
+      flex-shrink: 0;
+    }
+
+    .welcome-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .welcome-logo {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #ffffff;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 800;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+      flex-shrink: 0;
+    }
+
+    .welcome-title-wrap h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 2px;
+    }
+
+    .welcome-title-wrap p {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .welcome-recents-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .welcome-recents-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .welcome-recents-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .welcome-recent-item {
+      padding: 9px 12px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .welcome-recent-item:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+      transform: translateX(2px);
+    }
+
+    .welcome-recent-item-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .welcome-recent-item-path {
+      font-size: 10px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 240px;
+    }
+
+    .welcome-right-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 30px;
+      overflow-y: auto;
+    }
+
+    .drop-zone {
+      border: 2px dashed var(--border-focus);
+      background: var(--accent-subtle);
+      border-radius: var(--radius-lg);
+      padding: 44px 50px;
+      max-width: 580px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      transform: scale(1.01);
+      border-color: var(--accent-hover);
+      background: rgba(59, 130, 246, 0.2);
+    }
+
+    .drop-zone-icon {
+      width: 56px;
+      height: 56px;
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+
+    .drop-zone-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--text-main);
+    }
+
+    .drop-zone-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 22px;
+      line-height: 1.6;
+    }
+
+    .demo-buttons-row {
+      margin-top: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      max-width: 580px;
+      width: 100%;
+    }
+
+    .demo-buttons-title {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .demo-btn-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn-demo {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-demo:hover {
+      color: var(--text-main);
+      background: var(--bg-hover);
+      border-color: var(--accent);
+    }
+
+    /* Sub Toolbar */
+    .table-toolbar {
+      padding: 8px 14px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    .search-input-box {
+      position: relative;
+      width: 260px;
+      max-width: 100%;
+    }
+
+    .search-input-box input {
+      width: 100%;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 5px 10px 5px 28px;
+      font-size: 12px;
+      color: var(--text-main);
+      outline: none;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .search-input-box input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+
+    .pagination-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    .page-btn {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      width: 26px;
+      height: 26px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 12px;
+    }
+
+    .page-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .page-btn:not(:disabled):hover {
+      background: var(--bg-hover);
+    }
+
+    .select-dropdown {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 4px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* Modern Compact Data Grid Table */
+    .table-container {
+      flex: 1;
+      overflow: hidden;
+      background: var(--bg-primary);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .table-scroll-area {
+      flex: 1;
+      overflow: auto;
+      background: var(--bg-primary);
+    }
+
+    table.data-table {
+      width: auto;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    table.data-table thead {
+      position: sticky;
+      top: 0;
+      background: var(--bg-secondary);
+      z-index: 5;
+    }
+
+    table.data-table th {
+      padding: 6px 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      border-right: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.1s;
+      min-width: 140px;
+      background: var(--bg-secondary);
+    }
+
+    table.data-table th:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+
+    .th-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .th-col-name {
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .th-col-type {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--accent);
+      font-weight: 600;
+      text-transform: uppercase;
+      opacity: 0.85;
+    }
+
+    table.data-table th.row-idx-th {
+      text-align: center;
+      cursor: default;
+      color: var(--text-dim);
+      position: sticky;
+      left: 0;
+      z-index: 6;
+      background: var(--bg-secondary);
+    }
+
+    table.data-table td {
+      padding: 7px 14px;
+      border-right: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+      min-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      user-select: text;
+      -webkit-user-select: text;
+      background: var(--bg-primary);
+      text-align: left;
+    }
+
+    table.data-table td.row-idx-td {
+      text-align: center;
+      color: var(--text-dim);
+      font-family: var(--font-sans);
+      font-size: 11px;
+      background: var(--bg-sidebar);
+      position: sticky;
+      left: 0;
+      z-index: 4;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* Size the pinned index column to its longest number, including on later pages. */
+    table.data-table th.row-idx-th,
+    table.data-table td.row-idx-td {
+      width: auto;
+      min-width: 56px;
+      max-width: none;
+      padding-left: 10px;
+      padding-right: 10px;
+      white-space: nowrap;
+      overflow: visible;
+      text-overflow: clip;
+      font-variant-numeric: tabular-nums;
+    }
+
+    table.data-table th.row-idx-th .th-inner {
+      align-items: center;
+    }
+
+    table.data-table tbody tr:hover td {
+      background: var(--bg-hover) !important;
+    }
+
+    table.data-table tbody tr:nth-child(even) td:not(.row-idx-td) {
+      background: var(--zebra-bg);
+    }
+
+    table.data-table tr.ghost-row td {
+      color: transparent;
+      background: var(--bg-primary);
+    }
+    table.data-table tr.ghost-row td.row-idx-td {
+      color: rgba(148, 163, 184, 0.3);
+    }
+
+    .table-statusbar {
+      padding: 6px 16px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .cell-null {
+      color: var(--text-dim);
+      font-style: italic;
+      background: rgba(120, 120, 120, 0.1);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+
+    .cell-bool-true {
+      color: #10b981;
+      font-weight: 600;
+    }
+
+    .cell-bool-false {
+      color: #ef4444;
+      font-weight: 600;
+    }
+
+    .cell-clickable {
+      cursor: pointer;
+    }
+
+    /* Schema Panel */
+    .schema-panel-content {
+      flex: 1;
+      padding: 16px 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .schema-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .schema-card .table-container {
+      overflow: auto;
+    }
+
+    .schema-card-header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-sidebar);
+    }
+
+    .schema-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .code-block-container {
+      position: relative;
+      background: var(--code-bg);
+      padding: 12px 16px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-main);
+      overflow-x: auto;
+      user-select: text;
+      -webkit-user-select: text;
+      white-space: pre;
+    }
+
+    .type-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .type-string { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+    .type-int { background: rgba(168, 85, 247, 0.15); color: #9333ea; }
+    .type-double { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+    .type-bool { background: rgba(16, 185, 129, 0.15); color: #059669; }
+    .type-complex { background: rgba(236, 72, 153, 0.15); color: #db2777; }
+    .type-timestamp { background: rgba(14, 165, 233, 0.15); color: #0284c7; }
+
+    /* SQL Studio Panel */
+    .sql-panel-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sql-editor-container {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .sql-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .sql-textarea {
+      width: 100%;
+      height: 90px;
+      background: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 8px 12px;
+      resize: vertical;
+      outline: none;
+      user-select: text;
+      -webkit-user-select: text;
+      transition: border-color 0.15s;
+    }
+
+    .sql-textarea:focus {
+      border-color: var(--border-focus);
+    }
+
+    .sql-status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .sql-results-container {
+      flex: 1;
+      overflow: auto;
+      background: var(--bg-primary);
+    }
+
+    /* Metadata Panel */
+    .metadata-panel-content {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .meta-stat-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .meta-stat-title {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .meta-stat-val {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .meta-stat-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* Modal / Inspector */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      width: 90%;
+      max-width: 620px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .modal-body {
+      padding: 16px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      user-select: text;
+      -webkit-user-select: text;
+      background: var(--code-bg);
+    }
+
+    .modal-footer {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      background: var(--bg-sidebar);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: var(--shadow-md);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.25s ease;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Keep oversized tables inside their scroll areas as the window shrinks. */
+    .app-body, .content-area, .tab-panel, .welcome-container, .welcome-right-pane,
+    .table-container, .table-scroll-area, .sql-panel-content, .sql-results-container {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    @media (max-width: 1100px) {
+      header {
+        flex-wrap: wrap;
+        gap: 8px 14px;
+      }
+
+      .tabs-nav {
+        order: 1;
+        width: 100%;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation & Header Bar (Active when file is loaded) -->
+  <header id="mainHeader" style="display: none;">
+    <div class="header-left">
+      <button class="btn-icon active" id="btnToggleSidebar" onclick="toggleSidebar()" title="显示/隐藏左侧边栏 (Cmd+B)">
+        ◨
+      </button>
+      <div class="file-meta-header">
+        <div class="file-badge-icon" id="hdrBadgeIcon">PQ</div>
+        <div class="file-details">
+          <div class="file-title-row">
+            <span class="file-title" id="hdrFileName">dataset.parquet</span>
+            <span class="pill-badge" id="hdrFormatBadge">PARQUET</span>
+            <span class="pill-badge accent" id="hdrRowsBadge">0 行</span>
+            <span class="pill-badge" id="hdrColsBadge">0 列</span>
+            <span class="pill-badge" id="hdrSizeBadge">0 KB</span>
+          </div>
+          <div class="file-subtext" id="hdrFilePath">/path/to/file.parquet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Tabs -->
+    <nav class="tabs-nav">
+      <button class="tab-btn active" onclick="switchTab('data')">
+        <span>📊</span> 数据预览
+      </button>
+      <button class="tab-btn" onclick="switchTab('schema')">
+        <span>📋</span> 表结构
+      </button>
+      <button class="tab-btn" onclick="switchTab('sql')">
+        <span>⚡️</span> DuckDB SQL
+      </button>
+      <button class="tab-btn" onclick="switchTab('meta')">
+        <span>ℹ️</span> 文件元数据
+      </button>
+    </nav>
+
+    <!-- Actions -->
+    <div class="header-actions">
+      <button class="btn" onclick="openFileDialog()">
+        <span>📂</span> 打开文件
+      </button>
+      <button class="btn" onclick="exportDataDialog()">
+        <span>💾</span> 导出
+      </button>
+      <button class="btn" onclick="reloadCurrentFile()">
+        <span>🔄</span> 刷新
+      </button>
+    </div>
+  </header>
+
+  <!-- App Body (Sidebar + Content) -->
+  <div class="app-body">
+
+    <!-- Left Sidebar (Active when file is loaded) -->
+    <aside class="sidebar" id="appSidebar" style="display: none;">
+      <!-- Sidebar Summary -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>数据概览</span>
+          <span class="pill-badge" id="sbFormatBadge">v2.6</span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6;">
+          <div>行数: <strong id="sbRowsVal" style="color: var(--text-main);">0</strong></div>
+          <div>列数: <strong id="sbColsVal" style="color: var(--text-main);">0</strong></div>
+          <div>大小: <strong id="sbSizeVal" style="color: var(--text-main);">0</strong></div>
+        </div>
+      </div>
+
+      <!-- Iceberg Metadata Section (Shown when Iceberg Avro) -->
+      <div class="sidebar-section" id="sbIcebergSection" style="display: none;">
+        <div class="sidebar-title">
+          <span>🧊 Iceberg 元数据</span>
+          <span class="pill-badge iceberg" id="sbIcebergBadge">MANIFEST</span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; display: flex; flex-direction: column; gap: 4px;">
+          <div id="sbIcebergTypeRow">类型: <strong id="sbIcebergTypeVal" style="color: var(--text-main);">-</strong></div>
+          <div id="sbIcebergSnapRow" style="display: none;">Snapshot ID: <strong id="sbIcebergSnapVal" style="color: var(--text-main); font-family: var(--font-mono); font-size: 10px; word-break: break-all;">-</strong></div>
+          <div id="sbIcebergSeqRow" style="display: none;">Seq No: <strong id="sbIcebergSeqVal" style="color: var(--text-main);">-</strong></div>
+          <div id="sbIcebergSpecRow" style="display: none;">分区规则: <strong id="sbIcebergSpecVal" style="color: var(--text-main);">-</strong></div>
+        </div>
+      </div>
+
+      <!-- Partitions Section (Shown when directory with multiple parts) -->
+      <div class="sidebar-section" id="sbPartsSection" style="display: none;">
+        <div class="sidebar-title">
+          <span>分片文件</span>
+          <span class="pill-badge" id="sbPartsCount">0</span>
+        </div>
+        <div id="sbPartsList" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+      </div>
+
+      <!-- Columns / Fields Section -->
+      <div class="sidebar-section" style="padding-bottom: 6px;">
+        <div class="sidebar-title">
+          <span>字段列表</span>
+          <span class="pill-badge" id="sbFieldsCount">0</span>
+        </div>
+        <input type="text" class="sidebar-search" id="sbSearchInput" placeholder="过滤字段名..." oninput="filterSidebarColumns(this.value)">
+      </div>
+      <div class="sidebar-list" id="sbColumnsList"></div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <section class="content-area">
+
+      <!-- 0. Empty / Welcome Screen (2-Column Balanced Design) -->
+      <div id="welcomeScreen" class="welcome-container">
+        
+        <!-- Welcome Left Pane: Branding & Recent Files -->
+        <div class="welcome-left-pane">
+          <div class="welcome-brand">
+            <div class="welcome-logo">PQ</div>
+            <div class="welcome-title-wrap">
+              <h1>Parquet QuickView</h1>
+              <p>毫秒级 Parquet 数据查看器</p>
+            </div>
+          </div>
+
+          <div class="welcome-recents-section">
+            <div class="welcome-recents-header">
+              <span>🕒 最近打开的文件</span>
+              <span id="recentCountBadge" style="font-size: 10px; color: var(--text-dim);"></span>
+            </div>
+            <div class="welcome-recents-list" id="recentItems">
+              <div style="font-size: 11px; color: var(--text-dim); padding: 12px 0;">暂无最近记录</div>
+            </div>
+          </div>
+
+          <div style="font-size: 11px; color: var(--text-dim); line-height: 1.5; border-top: 1px solid var(--border-color); padding-top: 12px;">
+            <div>快捷键:</div>
+            <div>• <strong style="color: var(--text-muted);">Cmd + O</strong> 打开文件</div>
+            <div>• <strong style="color: var(--text-muted);">Cmd + Enter</strong> 运行 SQL 查询</div>
+            <div>• <strong style="color: var(--text-muted);">Cmd + B</strong> 切换左侧边栏</div>
+          </div>
+        </div>
+
+        <!-- Welcome Right Pane: Drop Zone & Quick Samples -->
+        <div class="welcome-right-pane">
+          <div class="drop-zone" id="dropZone" onclick="openFileDialog()">
+            <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="12" y1="18" x2="12" y2="12"></line>
+              <line x1="9" y1="15" x2="15" y2="15"></line>
+            </svg>
+            <div class="drop-zone-title">拖拽 Parquet / Iceberg Avro 文件或目录到这里</div>
+            <div class="drop-zone-subtitle">
+              告别繁琐缓慢的 spark-shell 启动，即开即看。<br>
+              全面支持 Parquet 单文件与分区目录、Iceberg 快照/清单 Avro 元数据，内置 DuckDB 闪电查询。
+            </div>
+            <button class="btn btn-primary" onclick="event.stopPropagation(); openFileDialog()">
+              <span>📂</span> 选择 Parquet / Iceberg Avro 文件 (Cmd+O)
+            </button>
+          </div>
+
+          <div class="demo-buttons-row">
+            <div class="demo-buttons-title">快速体验内置测试数据集</div>
+            <div class="demo-btn-group">
+              <button class="btn-demo" onclick="loadParquetFile('/Users/huangsheng/Documents/Codex/2026-10-13/ni-y/outputs/iceberg-partition-demo/warehouse/demo/partitioned/metadata/86b2d965-78cc-4a0f-ac6f-73e90976463e-m0.avro')">
+                <span>🧊</span> Iceberg 清单 (m0.avro)
+              </button>
+              <button class="btn-demo" onclick="loadParquetFile('/Users/huangsheng/Documents/Codex/2026-10-13/ni-y/outputs/iceberg-partition-demo/warehouse/demo/partitioned/metadata/snap-7973159704479772107-0-86b2d965-78cc-4a0f-ac6f-73e90976463e.avro')">
+                <span>🧊</span> Iceberg 快照清单 (snap.avro)
+              </button>
+              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/spark_dir_test.parquet')">
+                <span>📁</span> Spark 多分片目录 (part-*.parquet)
+              </button>
+              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/large_test.parquet')">
+                <span>📊</span> 10 万行数据集 (4 列)
+              </button>
+              <button class="btn-demo" onclick="loadParquetFile('/private/tmp/sample_test.parquet')">
+                <span>🧪</span> 嵌套类型 / 数组数据集
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 1. Data Grid Tab -->
+      <div id="tab-data" class="tab-panel">
+        <div class="table-toolbar">
+          <div class="search-input-box">
+            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="searchInput" placeholder="全列检索 (按回车过滤)..." onkeydown="handleSearchKey(event)">
+          </div>
+
+          <div class="pagination-bar">
+            <span id="pageInfoText">第 1 页 / 共 1 页 (0 行)</span>
+            <button class="page-btn" id="btnFirstPage" onclick="goToPage(1)" title="第一页">⇤</button>
+            <button class="page-btn" id="btnPrevPage" onclick="goToPage(currentPage - 1)" title="上一页">‹</button>
+            <span style="margin: 0 2px;">页: <span id="curPageNum">1</span></span>
+            <button class="page-btn" id="btnNextPage" onclick="goToPage(currentPage + 1)" title="下一页">›</button>
+            <button class="page-btn" id="btnLastPage" onclick="goToPage(totalPages)" title="最后一页">⇥</button>
+            
+            <span style="margin-left: 10px;">每页:</span>
+            <select class="select-dropdown" id="pageSizeSelect" onchange="changePageSize(this.value)">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="table-container" id="tableContainer">
+          <div class="table-scroll-area">
+            <table class="data-table" id="dataTable">
+              <thead id="dataThead"></thead>
+              <tbody id="dataTbody"></tbody>
+            </table>
+          </div>
+          <div class="table-statusbar">
+            <span id="tableStatusText">共 0 行数据</span>
+            <span id="tableStatusTime"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Schema Tab -->
+      <div id="tab-schema" class="tab-panel">
+        <div class="schema-panel-content">
+          <!-- Iceberg Underlying Table Schema (Shown if Iceberg manifest contains table_schema) -->
+          <div class="schema-card" id="icebergTableCard" style="display: none;">
+            <div class="schema-card-header">
+              <div class="schema-card-title">
+                <span>🧊</span> Iceberg 业务数据表结构 (Iceberg Table Schema & DDL)
+              </div>
+              <button class="btn" onclick="copyIcebergDDL()">
+                <span>📋</span> 复制 Iceberg DDL
+              </button>
+            </div>
+            <div class="table-container" style="max-height: 260px;">
+              <table class="data-table" id="icebergTable">
+                <thead>
+                  <tr>
+                    <th style="width: 70px; text-align: center;">Field ID</th>
+                    <th>字段名 (Field Name)</th>
+                    <th>Iceberg 逻辑类型</th>
+                    <th>是否必填 (Required)</th>
+                  </tr>
+                </thead>
+                <tbody id="icebergTableTbody"></tbody>
+              </table>
+            </div>
+            <div class="code-block-container" id="icebergDDLCode" style="border-top: 1px solid var(--border-color);"></div>
+          </div>
+
+          <div class="schema-card">
+            <div class="schema-card-header">
+              <div class="schema-card-title">
+                <span>📋</span> <span id="schemaColCardTitle">列定义列表</span> (<span id="schemaColCount">0</span> 列)
+              </div>
+              <div class="search-input-box" style="width: 200px;">
+                <input type="text" id="schemaSearchInput" placeholder="过滤列名..." oninput="filterSchemaColumns(this.value)">
+              </div>
+            </div>
+            <div class="table-container" style="max-height: 380px;">
+              <table class="data-table" id="schemaTable">
+                <thead>
+                  <tr>
+                    <th style="width: 45px; text-align: center;">#</th>
+                    <th>列名 (Column Name)</th>
+                    <th>物理类型 (PyArrow)</th>
+                    <th>Spark DDL 类型</th>
+                    <th>是否可为空 (Nullable)</th>
+                    <th>压缩算法</th>
+                  </tr>
+                </thead>
+                <tbody id="schemaTbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="schema-card">
+            <div class="schema-card-header">
+              <div class="schema-card-title">
+                <span>⚡️</span> <span id="sparkDDLCardTitle">Spark SQL 建表 DDL (直接在 Spark / Hive 中使用)</span>
+              </div>
+              <button class="btn" onclick="copySparkDDL()">
+                <span>📋</span> 复制 DDL
+              </button>
+            </div>
+            <div class="code-block-container" id="sparkDDLCode"></div>
+          </div>
+
+          <div class="schema-card">
+            <div class="schema-card-header">
+              <div class="schema-card-title">
+                <span>🐍</span> PySpark StructType 代码
+              </div>
+              <button class="btn" onclick="copyPySparkSchema()">
+                <span>📋</span> 复制 PySpark 代码
+              </button>
+            </div>
+            <div class="code-block-container" id="pysparkCode"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. SQL Studio Tab -->
+      <div id="tab-sql" class="tab-panel">
+        <div class="sql-panel-content">
+          <div class="sql-editor-container">
+            <div class="sql-toolbar">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-weight: 600; font-size: 13px;">SQL 编辑器 (DuckDB 引擎)</span>
+                <span class="pill-badge">快捷键: Cmd + Enter</span>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <select class="select-dropdown" id="sqlTemplateSelect" onchange="applySqlTemplate(this.value)">
+                  <option value="">-- 常用查询模板 --</option>
+                  <option value="SELECT * FROM data LIMIT 100">查看前 100 行</option>
+                  <option value="SELECT count(*) as total_rows FROM data">统计总行数</option>
+                  <option value="SELECT column, count(*) FROM data GROUP BY 1 ORDER BY 2 DESC LIMIT 10">分组统计 Top 10</option>
+                  <option value="DESCRIBE data">查看数据表字段结构 (DESCRIBE)</option>
+                  <option value="SUMMARIZE data">统计字段分布与最大/最小值 (SUMMARIZE)</option>
+                </select>
+                <button class="btn btn-primary" id="btnRunQuery" onclick="executeSqlQuery()">
+                  <span id="runQueryIcon">▶</span> 执行查询 (Cmd+Enter)
+                </button>
+              </div>
+            </div>
+            <textarea class="sql-textarea" id="sqlEditor" spellcheck="false" placeholder="输入 SQL 查询... 表名直接使用 data 或 t"></textarea>
+            <div class="sql-status-bar">
+              <span id="sqlExecutionStatus">就绪 (表名直接写 `data` 即可)</span>
+              <span id="sqlExecutionTime"></span>
+            </div>
+          </div>
+
+          <div class="sql-results-container">
+            <table class="data-table" id="sqlResultTable">
+              <thead id="sqlResultThead"></thead>
+              <tbody id="sqlResultTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Metadata Tab -->
+      <div id="tab-meta" class="tab-panel">
+        <div class="metadata-panel-content">
+          <div class="meta-stat-card">
+            <div class="meta-stat-title">总行数 (Total Rows)</div>
+            <div class="meta-stat-val" id="metaTotalRows">0</div>
+            <div class="meta-stat-desc" id="metaTotalRowsDesc">Parquet / Avro 中的记录总数</div>
+          </div>
+
+          <div class="meta-stat-card">
+            <div class="meta-stat-title">列总数 (Columns)</div>
+            <div class="meta-stat-val" id="metaNumCols">0</div>
+            <div class="meta-stat-desc">Schema 包含的字段数量</div>
+          </div>
+
+          <div class="meta-stat-card">
+            <div class="meta-stat-title">磁盘文件大小 (File Size)</div>
+            <div class="meta-stat-val" id="metaFileSize">0 B</div>
+            <div class="meta-stat-desc" id="metaFileCountDesc">单文件</div>
+          </div>
+
+          <div class="meta-stat-card" id="metaRowGroupsCard">
+            <div class="meta-stat-title">Row Groups (行组数)</div>
+            <div class="meta-stat-val" id="metaNumRowGroups">0</div>
+            <div class="meta-stat-desc">存储划分的行组或块数量</div>
+          </div>
+
+          <div class="meta-stat-card">
+            <div class="meta-stat-title">生成者 (Created By)</div>
+            <div class="meta-stat-val" style="font-size: 13px; font-family: var(--font-mono); word-break: break-all;" id="metaCreatedBy">-</div>
+            <div class="meta-stat-desc">写入引擎与版本 (Spark / Arrow / Avro)</div>
+          </div>
+
+          <div class="meta-stat-card">
+            <div class="meta-stat-title" id="metaFormatVersionTitle">规范版本</div>
+            <div class="meta-stat-val" id="metaFormatVersion">-</div>
+            <div class="meta-stat-desc" id="metaFormatVersionDesc">格式规范标准版本</div>
+          </div>
+
+          <div class="meta-stat-card" id="metaIcebergSnapCard" style="display: none;">
+            <div class="meta-stat-title">Iceberg 快照 ID (Snapshot ID)</div>
+            <div class="meta-stat-val" style="font-size: 14px; font-family: var(--font-mono); word-break: break-all;" id="metaIcebergSnapId">-</div>
+            <div class="meta-stat-desc" id="metaIcebergParentSnapDesc">父快照 ID: -</div>
+          </div>
+
+          <div class="meta-stat-card" id="metaIcebergSeqCard" style="display: none;">
+            <div class="meta-stat-title">Iceberg 序列号 (Sequence Number)</div>
+            <div class="meta-stat-val" id="metaIcebergSeqNum">-</div>
+            <div class="meta-stat-desc">Iceberg 表操作序列号</div>
+          </div>
+
+          <div class="meta-stat-card" id="metaIcebergSpecCard" style="display: none;">
+            <div class="meta-stat-title">Iceberg 分区规范 (Partition Spec)</div>
+            <div class="meta-stat-val" style="font-size: 13px;" id="metaIcebergSpecVal">-</div>
+            <div class="meta-stat-desc" id="metaIcebergSpecIdDesc">Spec ID: 0</div>
+          </div>
+
+          <div class="meta-stat-card" style="grid-column: 1 / -1;" id="sparkMetaCard">
+            <div class="meta-stat-title">Spark 专属元数据 (Spark Row Metadata)</div>
+            <div class="code-block-container" style="max-height: 220px;" id="metaSparkJson">无 Spark 专属附加元数据</div>
+          </div>
+
+          <div class="meta-stat-card" style="grid-column: 1 / -1; display: none;" id="icebergMetaCard">
+            <div class="meta-stat-title">Iceberg 原始元数据 (Iceberg Metadata JSON)</div>
+            <div class="code-block-container" style="max-height: 240px;" id="metaIcebergJson">无 Iceberg 元数据</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- Cell Value Inspector Modal -->
+  <div class="modal-overlay" id="cellModal" onclick="closeCellModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title" id="cellModalTitle">字段内容查看</div>
+        <button class="btn" onclick="closeCellModal()">✕</button>
+      </div>
+      <div class="modal-body" id="cellModalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="btnOpenCellFile" style="display: none;" onclick="openInspectedFile()">
+          <span>📂</span> <span id="btnOpenCellFileText">打开目标文件</span>
+        </button>
+        <button class="btn" onclick="copyModalContent()">
+          <span>📋</span> 复制内容
+        </button>
+        <button class="btn" onclick="closeCellModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast">
+    <span id="toastIcon">✓</span>
+    <span id="toastMsg">操作成功</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
