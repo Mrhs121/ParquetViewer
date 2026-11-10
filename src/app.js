@@ -197,7 +197,7 @@ function toggleSkVisibility() {
   }
 }
 
-async function connectAndLoadCatalog() {
+async function connectAndLoadCatalog(autoEnterWorkspace = false) {
   if (isCatalogConnecting) return;
   const cfg = readCatalogFormValues();
   if (!cfg.rest_uri) {
@@ -220,11 +220,31 @@ async function connectAndLoadCatalog() {
       catalogConfig: JSON.stringify(cfg)
     });
     lastCatalogData = res;
-    const nsCount = (res.namespaces || []).length;
-    const totalTables = (res.namespaces || []).reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
+    const namespaces = res.namespaces || [];
+    const nsCount = namespaces.length;
+    const totalTables = namespaces.reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
     statusEl.innerHTML = `<span style="color: var(--success);">✓ 连接成功 (${res.elapsed_ms} ms) • 共 ${nsCount} 个 Namespace，${totalTables} 张表</span>`;
-    renderCatalogBrowser(res.namespaces || []);
+    renderCatalogBrowser(namespaces);
+    renderSidebarCatalogTree(namespaces, cfg.rest_uri);
+    switchSidebarMode("catalog");
     showToast(`成功连接 Catalog，发现 ${totalTables} 张 Iceberg 表`);
+
+    // Automatically enter the main workspace and load the first available table so user can browse data & switch tables in left sidebar
+    if (autoEnterWorkspace && totalTables > 0) {
+      let firstTableUri = null;
+      for (const ns of namespaces) {
+        if (ns.tables && ns.tables.length > 0) {
+          firstTableUri = ns.tables[0].uri;
+          break;
+        }
+      }
+      if (firstTableUri) {
+        closeCatalogModal();
+        if (!currentFilePath || !currentFilePath.startsWith("iceberg://")) {
+          loadParquetFile(firstTableUri);
+        }
+      }
+    }
   } catch (err) {
     statusEl.innerHTML = `<span style="color: var(--danger);">✕ 连接失败: ${escapeHtml(err.message)}</span>`;
     showToast("连接 Iceberg Catalog 失败: " + err.message, "danger");
@@ -233,6 +253,164 @@ async function connectAndLoadCatalog() {
     btn.disabled = false;
     icon.textContent = "🔌";
   }
+}
+
+// Switch Left Sidebar between 'catalog' (Table List) and 'inspector' (Current Table Columns/Metadata)
+function switchSidebarMode(mode) {
+  const catBtn = document.getElementById("sbModeCatalogBtn");
+  const inspBtn = document.getElementById("sbModeInspectorBtn");
+  const catPane = document.getElementById("sbCatalogPane");
+  const inspPane = document.getElementById("sbInspectorPane");
+  if (!catBtn || !inspBtn || !catPane || !inspPane) return;
+
+  if (mode === "catalog") {
+    catBtn.classList.add("active");
+    inspBtn.classList.remove("active");
+    catPane.style.display = "flex";
+    inspPane.style.display = "none";
+  } else {
+    inspBtn.classList.add("active");
+    catBtn.classList.remove("active");
+    inspPane.style.display = "flex";
+    catPane.style.display = "none";
+  }
+}
+
+async function refreshCatalogTree() {
+  const cfg = getCatalogConfig();
+  if (!cfg || !cfg.rest_uri) {
+    openCatalogModal();
+    return;
+  }
+  const treeEl = document.getElementById("sbCatalogTree");
+  if (treeEl) {
+    treeEl.innerHTML = `<div style="font-size: 11px; color: var(--accent); text-align: center; padding: 24px 10px;"><span class="spinner"></span> 正在加载库表列表...</div>`;
+  }
+  try {
+    const res = await sendToNative("catalog_namespaces", {
+      catalogConfig: JSON.stringify(cfg)
+    });
+    lastCatalogData = res;
+    renderSidebarCatalogTree(res.namespaces || [], cfg.rest_uri);
+    renderCatalogBrowser(res.namespaces || []);
+  } catch (err) {
+    if (treeEl) {
+      treeEl.innerHTML = `<div style="font-size: 11px; color: var(--danger); padding: 16px 10px;">加载失败: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+function renderSidebarCatalogTree(namespaces, restUri) {
+  const treeEl = document.getElementById("sbCatalogTree");
+  const badgeEl = document.getElementById("sbCatalogTotalBadge");
+  const uriLabel = document.getElementById("sbCatalogUriLabel");
+  if (!treeEl) return;
+
+  const totalTables = (namespaces || []).reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
+  if (badgeEl) badgeEl.textContent = String(totalTables);
+  if (uriLabel && restUri) {
+    uriLabel.textContent = restUri;
+    uriLabel.title = restUri;
+  }
+
+  if (!namespaces || namespaces.length === 0) {
+    treeEl.innerHTML = `<div style="font-size: 11px; color: var(--text-dim); text-align: center; padding: 24px 10px;">暂无 Namespace 数据</div>`;
+    return;
+  }
+
+  const activeBaseUri = currentFilePath ? currentFilePath.split("@")[0] : "";
+  let html = "";
+  for (let i = 0; i < namespaces.length; i++) {
+    const nsObj = namespaces[i];
+    const nsName = nsObj.namespace || "(default)";
+    const tables = nsObj.tables || [];
+    const hasActiveTable = tables.some(t => t.uri === activeBaseUri);
+    const isExpanded = i < 2 || hasActiveTable || namespaces.length <= 6;
+
+    html += `
+      <div class="sb-ns-group" data-ns="${escapeAttr(nsName.toLowerCase())}">
+        <div class="sb-ns-header" onclick="toggleSidebarNsGroup(this)">
+          <div style="display: flex; align-items: center; gap: 5px; min-width: 0;">
+            <span class="sb-ns-arrow" style="font-size: 9px; color: var(--text-dim); width: 10px;">${isExpanded ? '▼' : '▶'}</span>
+            <span>🗂️</span>
+            <span style="font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeAttr(nsName)}">${escapeHtml(nsName)}</span>
+          </div>
+          <span class="pill-badge" style="font-size: 10px; padding: 0 6px;">${tables.length}</span>
+        </div>
+        <div class="sb-ns-tables" style="display: ${isExpanded ? 'flex' : 'none'};">
+    `;
+
+    for (const tbl of tables) {
+      const isActive = tbl.uri === activeBaseUri;
+      html += `
+        <div class="sb-table-item ${isActive ? 'active' : ''}" data-uri="${escapeAttr(tbl.uri)}" data-search="${escapeAttr((tbl.full_name || tbl.name).toLowerCase())}" onclick="selectSidebarCatalogTable('${escapeAttr(tbl.uri)}')" title="${escapeAttr(tbl.full_name)}">
+          <span style="font-size: 11px; flex-shrink: 0;">🧊</span>
+          <span style="overflow: hidden; text-overflow: ellipsis;">${escapeHtml(tbl.name)}</span>
+        </div>
+      `;
+    }
+
+    html += `
+        </div>
+      </div>
+    `;
+  }
+  treeEl.innerHTML = html;
+}
+
+function toggleSidebarNsGroup(headerEl) {
+  const group = headerEl.closest(".sb-ns-group");
+  if (!group) return;
+  const list = group.querySelector(".sb-ns-tables");
+  const arrow = group.querySelector(".sb-ns-arrow");
+  if (!list) return;
+  const isHidden = list.style.display === "none";
+  list.style.display = isHidden ? "flex" : "none";
+  if (arrow) arrow.textContent = isHidden ? "▼" : "▶";
+}
+
+function filterSidebarCatalogTree(kw) {
+  const clean = kw.trim().toLowerCase();
+  document.querySelectorAll("#sbCatalogTree .sb-ns-group").forEach((group, idx) => {
+    const nsName = group.getAttribute("data-ns") || "";
+    const list = group.querySelector(".sb-ns-tables");
+    const arrow = group.querySelector(".sb-ns-arrow");
+    const items = group.querySelectorAll(".sb-table-item");
+    if (!clean) {
+      group.style.display = "";
+      items.forEach(it => it.style.display = "");
+      if (list) list.style.display = idx < 2 ? "flex" : "none";
+      if (arrow) arrow.textContent = idx < 2 ? "▼" : "▶";
+      return;
+    }
+    let anyVisible = false;
+    items.forEach(it => {
+      const s = it.getAttribute("data-search") || "";
+      const match = s.includes(clean) || nsName.includes(clean);
+      it.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    const showGroup = anyVisible || nsName.includes(clean);
+    group.style.display = showGroup ? "" : "none";
+    if (showGroup && list) {
+      list.style.display = "flex";
+      if (arrow) arrow.textContent = "▼";
+    }
+  });
+}
+
+function selectSidebarCatalogTable(uri) {
+  navigationStack.length = 0;
+  updateBackButtonUI();
+  loadParquetFile(uri);
+}
+
+function updateSidebarActiveTableHighlight(path) {
+  const baseUri = path ? path.split("@")[0] : "";
+  document.querySelectorAll("#sbCatalogTree .sb-table-item").forEach(el => {
+    const uri = el.getAttribute("data-uri");
+    el.classList.toggle("active", uri === baseUri);
+  });
 }
 
 function renderCatalogBrowser(namespaces) {
@@ -331,6 +509,7 @@ function selectCatalogTable(uri) {
   closeCatalogModal();
   navigationStack.length = 0;
   updateBackButtonUI();
+  switchSidebarMode("catalog");
   loadParquetFile(uri);
 }
 
@@ -476,6 +655,14 @@ async function loadParquetFile(path) {
     currentInfo = info;
     saveRecentFile(path, info.file_name);
     updateBackButtonUI();
+    updateSidebarActiveTableHighlight(path);
+
+    if (isRemoteTable) {
+      switchSidebarMode("catalog");
+      if (!lastCatalogData) {
+        refreshCatalogTree();
+      }
+    }
 
     // Update Header
     document.getElementById("welcomeScreen").style.display = "none";

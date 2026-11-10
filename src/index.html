@@ -311,9 +311,9 @@
 
     /* Left Sidebar */
     .sidebar {
-      width: 240px;
-      min-width: 200px;
-      max-width: 320px;
+      width: 265px;
+      min-width: 220px;
+      max-width: 340px;
       background: var(--bg-sidebar);
       border-right: 1px solid var(--border-color);
       display: flex;
@@ -324,7 +324,103 @@
     }
 
     .sidebar.collapsed {
-      margin-left: -241px;
+      margin-left: -266px;
+    }
+
+    .sidebar-mode-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      padding: 6px 8px;
+      gap: 4px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .sidebar-mode-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5px 6px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+
+    .sidebar-mode-btn:hover {
+      color: var(--text-main);
+      background: var(--bg-hover);
+    }
+
+    .sidebar-mode-btn.active {
+      background: var(--accent-subtle);
+      color: var(--accent);
+      border-color: rgba(59, 130, 246, 0.35);
+    }
+
+    .sb-ns-group {
+      margin-bottom: 4px;
+    }
+
+    .sb-ns-header {
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.03);
+      transition: background 0.12s;
+    }
+
+    .sb-ns-header:hover {
+      background: var(--bg-hover);
+    }
+
+    .sb-ns-tables {
+      display: flex;
+      flex-direction: column;
+      padding-left: 10px;
+      margin-top: 2px;
+      gap: 1px;
+      border-left: 1px solid var(--border-color);
+      margin-left: 10px;
+    }
+
+    .sb-table-item {
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.12s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sb-table-item:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+
+    .sb-table-item.active {
+      background: var(--accent-subtle);
+      color: var(--accent);
+      font-weight: 600;
     }
 
     .sidebar-section {
@@ -1405,69 +1501,101 @@
   <!-- App Body (Sidebar + Content) -->
   <div class="app-body">
 
-    <!-- Left Sidebar (Active when file is loaded) -->
+    <!-- Left Sidebar (Active when file or catalog is loaded) -->
     <aside class="sidebar" id="appSidebar" style="display: none;">
-      <!-- Sidebar Summary -->
-      <div class="sidebar-section">
-        <div class="sidebar-title">
-          <span>数据概览</span>
-          <span class="pill-badge" id="sbFormatBadge">v2.6</span>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6;">
-          <div>行数: <strong id="sbRowsVal" style="color: var(--text-main);">0</strong></div>
-          <div>列数: <strong id="sbColsVal" style="color: var(--text-main);">0</strong></div>
-          <div>大小: <strong id="sbSizeVal" style="color: var(--text-main);">0</strong></div>
-        </div>
+      <!-- Top Mode Switcher: Catalog Table List vs Current Table Inspector -->
+      <div class="sidebar-mode-tabs">
+        <button class="sidebar-mode-btn" id="sbModeCatalogBtn" onclick="switchSidebarMode('catalog')">
+          <span>🗂️</span> 库表列表 <span class="pill-badge" id="sbCatalogTotalBadge" style="font-size: 9px; padding: 0 5px;">0</span>
+        </button>
+        <button class="sidebar-mode-btn active" id="sbModeInspectorBtn" onclick="switchSidebarMode('inspector')">
+          <span>📋</span> 字段与详情
+        </button>
       </div>
 
-      <!-- Iceberg Metadata Section (Shown when Iceberg Avro or Catalog Table) -->
-      <div class="sidebar-section" id="sbIcebergSection" style="display: none;">
-        <div class="sidebar-title">
-          <span>🧊 Iceberg 元数据</span>
-          <span class="pill-badge iceberg" id="sbIcebergBadge">MANIFEST</span>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; display: flex; flex-direction: column; gap: 5px;">
-          <div id="sbIcebergTypeRow">类型: <strong id="sbIcebergTypeVal" style="color: var(--text-main);">-</strong></div>
-          <div id="sbIcebergSnapSelectRow" style="display: none;">
-            <div style="margin-bottom: 2px;">快照版本 (Time Travel):</div>
-            <select class="select-dropdown" id="sbIcebergSnapSelect" style="width: 100%; font-family: var(--font-mono); font-size: 10px;" onchange="switchIcebergSnapshot(this.value)"></select>
+      <!-- Mode 1: Catalog Tables Tree Pane (Quick Table Switcher) -->
+      <div id="sbCatalogPane" style="display: none; flex: 1; flex-direction: column; overflow: hidden;">
+        <div class="sidebar-section" style="padding: 10px 12px; gap: 6px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+            <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="sbCatalogUriLabel" title="未连接 Catalog">未连接 Catalog</span>
+            <div style="display: flex; gap: 4px; flex-shrink: 0;">
+              <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="refreshCatalogTree()" title="刷新库表列表">🔄</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="openCatalogModal()" title="修改连接配置">⚙️ 配置</button>
+            </div>
           </div>
-          <div id="sbIcebergSnapRow" style="display: none;">Snapshot ID: <strong id="sbIcebergSnapVal" style="color: var(--text-main); font-family: var(--font-mono); font-size: 10px; word-break: break-all;">-</strong></div>
-          <div id="sbIcebergSeqRow" style="display: none;">Seq No: <strong id="sbIcebergSeqVal" style="color: var(--text-main);">-</strong></div>
-          <div id="sbIcebergSpecRow" style="display: none;">分区规则: <strong id="sbIcebergSpecVal" style="color: var(--text-main);">-</strong></div>
-          <button class="btn" id="sbOpenSnapAvroBtn" style="display: none; margin-top: 2px; font-size: 11px; justify-content: center;" onclick="openCurrentSnapshotManifestList()">
-            <span>📄</span> 查看快照清单 (snap.avro)
-          </button>
+          <input type="text" class="sidebar-search" id="sbCatalogSearchInput" placeholder="搜索库名或表名 (快速切换)..." oninput="filterSidebarCatalogTree(this.value)">
+        </div>
+        <div class="sidebar-list" id="sbCatalogTree" style="padding: 6px 8px;">
+          <div style="font-size: 11px; color: var(--text-dim); text-align: center; padding: 30px 10px;">
+            点击上方「⚙️ 配置」连接远程 Iceberg Catalog
+          </div>
         </div>
       </div>
 
-      <!-- Iceberg Manifests Section (Shown for Catalog Table) -->
-      <div class="sidebar-section" id="sbManifestsSection" style="display: none;">
-        <div class="sidebar-title">
-          <span>Manifest 清单文件</span>
-          <span class="pill-badge iceberg" id="sbManifestsCount">0</span>
+      <!-- Mode 2: Current Table / File Inspector Pane -->
+      <div id="sbInspectorPane" style="display: flex; flex: 1; flex-direction: column; overflow: hidden;">
+        <!-- Sidebar Summary -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">
+            <span>数据概览</span>
+            <span class="pill-badge" id="sbFormatBadge">v2.6</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6;">
+            <div>行数: <strong id="sbRowsVal" style="color: var(--text-main);">0</strong></div>
+            <div>列数: <strong id="sbColsVal" style="color: var(--text-main);">0</strong></div>
+            <div>大小: <strong id="sbSizeVal" style="color: var(--text-main);">0</strong></div>
+          </div>
         </div>
-        <div id="sbManifestsList" style="max-height: 110px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
-      </div>
 
-      <!-- Partitions Section (Shown when directory with multiple parts or Iceberg data files) -->
-      <div class="sidebar-section" id="sbPartsSection" style="display: none;">
-        <div class="sidebar-title">
-          <span id="sbPartsTitle">分片文件</span>
-          <span class="pill-badge" id="sbPartsCount">0</span>
+        <!-- Iceberg Metadata Section (Shown when Iceberg Avro or Catalog Table) -->
+        <div class="sidebar-section" id="sbIcebergSection" style="display: none;">
+          <div class="sidebar-title">
+            <span>🧊 Iceberg 元数据</span>
+            <span class="pill-badge iceberg" id="sbIcebergBadge">MANIFEST</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; display: flex; flex-direction: column; gap: 5px;">
+            <div id="sbIcebergTypeRow">类型: <strong id="sbIcebergTypeVal" style="color: var(--text-main);">-</strong></div>
+            <div id="sbIcebergSnapSelectRow" style="display: none;">
+              <div style="margin-bottom: 2px;">快照版本 (Time Travel):</div>
+              <select class="select-dropdown" id="sbIcebergSnapSelect" style="width: 100%; font-family: var(--font-mono); font-size: 10px;" onchange="switchIcebergSnapshot(this.value)"></select>
+            </div>
+            <div id="sbIcebergSnapRow" style="display: none;">Snapshot ID: <strong id="sbIcebergSnapVal" style="color: var(--text-main); font-family: var(--font-mono); font-size: 10px; word-break: break-all;">-</strong></div>
+            <div id="sbIcebergSeqRow" style="display: none;">Seq No: <strong id="sbIcebergSeqVal" style="color: var(--text-main);">-</strong></div>
+            <div id="sbIcebergSpecRow" style="display: none;">分区规则: <strong id="sbIcebergSpecVal" style="color: var(--text-main);">-</strong></div>
+            <button class="btn" id="sbOpenSnapAvroBtn" style="display: none; margin-top: 2px; font-size: 11px; justify-content: center;" onclick="openCurrentSnapshotManifestList()">
+              <span>📄</span> 查看快照清单 (snap.avro)
+            </button>
+          </div>
         </div>
-        <div id="sbPartsList" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
-      </div>
 
-      <!-- Columns / Fields Section -->
-      <div class="sidebar-section" style="padding-bottom: 6px;">
-        <div class="sidebar-title">
-          <span>字段列表</span>
-          <span class="pill-badge" id="sbFieldsCount">0</span>
+        <!-- Iceberg Manifests Section (Shown for Catalog Table) -->
+        <div class="sidebar-section" id="sbManifestsSection" style="display: none;">
+          <div class="sidebar-title">
+            <span>Manifest 清单文件</span>
+            <span class="pill-badge iceberg" id="sbManifestsCount">0</span>
+          </div>
+          <div id="sbManifestsList" style="max-height: 110px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
         </div>
-        <input type="text" class="sidebar-search" id="sbSearchInput" placeholder="过滤字段名..." oninput="filterSidebarColumns(this.value)">
+
+        <!-- Partitions Section (Shown when directory with multiple parts or Iceberg data files) -->
+        <div class="sidebar-section" id="sbPartsSection" style="display: none;">
+          <div class="sidebar-title">
+            <span id="sbPartsTitle">分片文件</span>
+            <span class="pill-badge" id="sbPartsCount">0</span>
+          </div>
+          <div id="sbPartsList" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+        </div>
+
+        <!-- Columns / Fields Section -->
+        <div class="sidebar-section" style="padding-bottom: 6px;">
+          <div class="sidebar-title">
+            <span>字段列表</span>
+            <span class="pill-badge" id="sbFieldsCount">0</span>
+          </div>
+          <input type="text" class="sidebar-search" id="sbSearchInput" placeholder="过滤字段名..." oninput="filterSidebarColumns(this.value)">
+        </div>
+        <div class="sidebar-list" id="sbColumnsList"></div>
       </div>
-      <div class="sidebar-list" id="sbColumnsList"></div>
     </aside>
 
     <!-- Main Content Area -->
@@ -1824,8 +1952,8 @@
             </div>
           </div>
 
-          <button class="btn btn-primary" id="btnConnectCatalog" style="justify-content: center; padding: 8px 12px; margin-top: 4px;" onclick="connectAndLoadCatalog()">
-            <span id="connectCatalogIcon">🔌</span> 连接并加载库表列表
+          <button class="btn btn-primary" id="btnConnectCatalog" style="justify-content: center; padding: 8px 12px; margin-top: 4px;" onclick="connectAndLoadCatalog(true)">
+            <span id="connectCatalogIcon">🔌</span> 连接并打开库表工作台
           </button>
 
           <div id="catalogConnStatus" style="font-size: 11px; color: var(--text-dim); line-height: 1.5; margin-top: 2px;">
