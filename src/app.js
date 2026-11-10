@@ -23,7 +23,7 @@ let lastCatalogData = null;
 const navigationStack = [];
 const pendingRequests = new Map();
 
-// Helper: Get saved Iceberg Catalog Configuration
+// Helper: Get saved Iceberg Catalog Configuration & Multi-Profile History
 function getCatalogConfig() {
   try {
     return JSON.parse(localStorage.getItem("pv_iceberg_catalog_config") || "{}");
@@ -32,8 +32,86 @@ function getCatalogConfig() {
   }
 }
 
+function getSavedCatalogProfiles() {
+  try {
+    let profiles = JSON.parse(localStorage.getItem("pv_iceberg_catalog_profiles") || "[]");
+    if (!Array.isArray(profiles)) profiles = [];
+    // Migrate single config if profiles list is empty
+    if (profiles.length === 0) {
+      const single = getCatalogConfig();
+      if (single && single.rest_uri) {
+        const migrated = {
+          id: single.id || ("conn_" + Date.now()),
+          name: single.name || formatDefaultConnName(single.rest_uri),
+          ...single
+        };
+        profiles.push(migrated);
+        localStorage.setItem("pv_iceberg_catalog_profiles", JSON.stringify(profiles));
+      }
+    }
+    return profiles;
+  } catch (e) {
+    return [];
+  }
+}
+
+function formatDefaultConnName(restUri) {
+  if (!restUri) return "未命名连接";
+  return restUri.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+}
+
 function saveCatalogConfig(cfg) {
-  localStorage.setItem("pv_iceberg_catalog_config", JSON.stringify(cfg));
+  const cleanName = (cfg.name || "").trim() || formatDefaultConnName(cfg.rest_uri);
+  let profiles = getSavedCatalogProfiles();
+  // Match existing profile by id, or by (rest_uri + s3_endpoint + warehouse)
+  let existingIdx = profiles.findIndex(p =>
+    (cfg.id && p.id === cfg.id) ||
+    (p.rest_uri === cfg.rest_uri && p.s3_endpoint === cfg.s3_endpoint && (p.warehouse || "") === (cfg.warehouse || ""))
+  );
+
+  const profileObj = {
+    id: existingIdx >= 0 ? profiles[existingIdx].id : (cfg.id || ("conn_" + Date.now())),
+    name: cleanName,
+    rest_uri: cfg.rest_uri,
+    s3_endpoint: cfg.s3_endpoint,
+    s3_access_key: cfg.s3_access_key,
+    s3_secret_key: cfg.s3_secret_key,
+    warehouse: cfg.warehouse || "",
+    s3_region: cfg.s3_region || "us-east-1",
+    updated_at: Date.now()
+  };
+
+  if (existingIdx >= 0) {
+    profiles.splice(existingIdx, 1);
+  }
+  profiles.unshift(profileObj);
+  profiles = profiles.slice(0, 20);
+
+  localStorage.setItem("pv_iceberg_catalog_profiles", JSON.stringify(profiles));
+  localStorage.setItem("pv_iceberg_catalog_config", JSON.stringify(profileObj));
+  renderConnHistoryList();
+  renderSidebarProfileSelect();
+  return profileObj;
+}
+
+function deleteCatalogProfile(profileId, event) {
+  if (event) event.stopPropagation();
+  let profiles = getSavedCatalogProfiles().filter(p => p.id !== profileId);
+  localStorage.setItem("pv_iceberg_catalog_profiles", JSON.stringify(profiles));
+
+  const current = getCatalogConfig();
+  if (current && current.id === profileId) {
+    if (profiles.length > 0) {
+      localStorage.setItem("pv_iceberg_catalog_config", JSON.stringify(profiles[0]));
+      fillCatalogForm(profiles[0]);
+    } else {
+      localStorage.removeItem("pv_iceberg_catalog_config");
+      resetCatalogFormForNew();
+    }
+  }
+  renderConnHistoryList();
+  renderSidebarProfileSelect();
+  showToast("已删除该连接记录");
 }
 
 // Helper: Native Bridge Communication
@@ -155,18 +233,149 @@ function initShortcuts() {
 // Iceberg REST Catalog Modal & Browser Logic
 // ============================================================================
 
+let editingProfileId = null;
+
 function initCatalogConfigForm() {
   const cfg = getCatalogConfig();
-  if (cfg.rest_uri) document.getElementById("catRestUri").value = cfg.rest_uri;
-  if (cfg.s3_endpoint) document.getElementById("catS3Endpoint").value = cfg.s3_endpoint;
-  if (cfg.s3_access_key) document.getElementById("catS3Ak").value = cfg.s3_access_key;
-  if (cfg.s3_secret_key) document.getElementById("catS3Sk").value = cfg.s3_secret_key;
-  if (cfg.warehouse) document.getElementById("catWarehouse").value = cfg.warehouse;
-  if (cfg.s3_region) document.getElementById("catS3Region").value = cfg.s3_region;
+  fillCatalogForm(cfg);
+  renderConnHistoryList();
+  renderSidebarProfileSelect();
+}
+
+function fillCatalogForm(cfg = {}) {
+  editingProfileId = cfg.id || null;
+  const nameEl = document.getElementById("catConnName");
+  if (nameEl) nameEl.value = cfg.name || "";
+  document.getElementById("catRestUri").value = cfg.rest_uri || "";
+  document.getElementById("catS3Endpoint").value = cfg.s3_endpoint || "";
+  document.getElementById("catS3Ak").value = cfg.s3_access_key || "";
+  document.getElementById("catS3Sk").value = cfg.s3_secret_key || "";
+  document.getElementById("catWarehouse").value = cfg.warehouse || "";
+  document.getElementById("catS3Region").value = cfg.s3_region || "us-east-1";
+}
+
+function resetCatalogFormForNew() {
+  editingProfileId = null;
+  fillCatalogForm({ s3_region: "us-east-1" });
+  renderConnHistoryList();
+  document.getElementById("catConnName")?.focus();
+}
+
+function renderConnHistoryList() {
+  const section = document.getElementById("connHistorySection");
+  const listEl = document.getElementById("connHistoryList");
+  if (!section || !listEl) return;
+
+  const profiles = getSavedCatalogProfiles();
+  if (profiles.length === 0) {
+    section.style.display = "none";
+    return;
+  }
+
+  section.style.display = "flex";
+  let html = "";
+  for (const p of profiles) {
+    const isActive = editingProfileId ? (p.id === editingProfileId) : (p.rest_uri === document.getElementById("catRestUri")?.value);
+    const title = p.name || formatDefaultConnName(p.rest_uri);
+    const sub = `${p.rest_uri}  •  S3: ${p.s3_endpoint || "-"}`;
+    html += `
+      <div class="conn-history-item ${isActive ? 'active' : ''}" onclick="selectHistoryProfile('${escapeAttr(p.id)}')">
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            🧊 ${escapeHtml(title)}
+          </div>
+          <div style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeAttr(sub)}">
+            ${escapeHtml(sub)}
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+          <button class="btn btn-iceberg-accent" style="padding: 3px 8px; font-size: 11px;" onclick="quickConnectHistoryProfile('${escapeAttr(p.id)}', event)">
+            ⚡ 直连
+          </button>
+          <button class="conn-del-btn" onclick="deleteCatalogProfile('${escapeAttr(p.id)}', event)" title="删除此连接记录">✕</button>
+        </div>
+      </div>
+    `;
+  }
+  listEl.innerHTML = html;
+}
+
+function selectHistoryProfile(profileId) {
+  const profiles = getSavedCatalogProfiles();
+  const found = profiles.find(p => p.id === profileId);
+  if (!found) return;
+  fillCatalogForm(found);
+  renderConnHistoryList();
+}
+
+function quickConnectHistoryProfile(profileId, event) {
+  if (event) event.stopPropagation();
+  selectHistoryProfile(profileId);
+  connectAndLoadCatalog(true);
+}
+
+function renderSidebarProfileSelect() {
+  const sel = document.getElementById("sbCatalogProfileSelect");
+  if (!sel) return;
+  const profiles = getSavedCatalogProfiles();
+  const current = getCatalogConfig();
+
+  if (profiles.length === 0) {
+    sel.innerHTML = `<option value="">未连接 Catalog</option>`;
+    return;
+  }
+
+  sel.innerHTML = profiles.map(p => {
+    const label = p.name || formatDefaultConnName(p.rest_uri);
+    const isSelected = (current && current.id === p.id) || (current && current.rest_uri === p.rest_uri);
+    return `<option value="${escapeAttr(p.id)}" ${isSelected ? 'selected' : ''}>🧊 ${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+async function switchCatalogProfileFromSidebar(profileId) {
+  if (!profileId) return;
+  const profiles = getSavedCatalogProfiles();
+  const target = profiles.find(p => p.id === profileId);
+  if (!target) return;
+
+  saveCatalogConfig(target);
+  fillCatalogForm(target);
+  showToast(`正在切换连接至: ${target.name || target.rest_uri}...`, "info");
+
+  const treeEl = document.getElementById("sbCatalogTree");
+  if (treeEl) {
+    treeEl.innerHTML = `<div style="font-size: 11px; color: var(--accent); text-align: center; padding: 24px 10px;"><span class="spinner"></span> 正在切换 Catalog...</div>`;
+  }
+
+  try {
+    const res = await sendToNative("catalog_namespaces", {
+      catalogConfig: JSON.stringify(target)
+    });
+    lastCatalogData = res;
+    const namespaces = res.namespaces || [];
+    renderSidebarCatalogTree(namespaces, target.rest_uri);
+
+    // Load first table of the switched catalog
+    for (const ns of namespaces) {
+      if (ns.tables && ns.tables.length > 0) {
+        navigationStack.length = 0;
+        updateBackButtonUI();
+        loadParquetFile(ns.tables[0].uri);
+        break;
+      }
+    }
+  } catch (err) {
+    showToast("切换 Catalog 失败: " + err.message, "danger");
+    if (treeEl) {
+      treeEl.innerHTML = `<div style="font-size: 11px; color: var(--danger); padding: 16px 10px;">连接失败: ${escapeHtml(err.message)}</div>`;
+    }
+  }
 }
 
 function readCatalogFormValues() {
   return {
+    id: editingProfileId || undefined,
+    name: document.getElementById("catConnName")?.value.trim() || "",
     rest_uri: document.getElementById("catRestUri").value.trim(),
     s3_endpoint: document.getElementById("catS3Endpoint").value.trim(),
     s3_access_key: document.getElementById("catS3Ak").value.trim(),
@@ -241,7 +450,9 @@ async function connectAndLoadCatalog(autoEnterWorkspace = false) {
           break;
         }
       }
-      if (firstTableUri && (!currentFilePath || !currentFilePath.startsWith("iceberg://"))) {
+      if (firstTableUri) {
+        navigationStack.length = 0;
+        updateBackButtonUI();
         loadParquetFile(firstTableUri);
       }
     }
@@ -303,15 +514,11 @@ async function refreshCatalogTree() {
 function renderSidebarCatalogTree(namespaces, restUri) {
   const treeEl = document.getElementById("sbCatalogTree");
   const badgeEl = document.getElementById("sbCatalogTotalBadge");
-  const uriLabel = document.getElementById("sbCatalogUriLabel");
+  renderSidebarProfileSelect();
   if (!treeEl) return;
 
   const totalTables = (namespaces || []).reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
   if (badgeEl) badgeEl.textContent = String(totalTables);
-  if (uriLabel && restUri) {
-    uriLabel.textContent = restUri;
-    uriLabel.title = restUri;
-  }
 
   if (!namespaces || namespaces.length === 0) {
     treeEl.innerHTML = `<div style="font-size: 11px; color: var(--text-dim); text-align: center; padding: 24px 10px;">暂无 Namespace 数据</div>`;

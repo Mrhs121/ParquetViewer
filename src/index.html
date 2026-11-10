@@ -512,16 +512,61 @@
 
     /* Iceberg REST Catalog Modal Styles */
     .catalog-modal-box {
-      max-width: 440px;
+      max-width: 480px;
       width: 92%;
+      max-height: 88vh;
     }
     .catalog-config-pane {
-      padding: 18px 20px;
+      padding: 16px 20px;
       background: var(--bg-secondary);
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 11px;
       overflow-y: auto;
+    }
+    .conn-history-box {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 155px;
+      overflow-y: auto;
+    }
+    .conn-history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .conn-history-item:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+    .conn-history-item.active {
+      border-color: var(--accent);
+      background: var(--accent-subtle);
+    }
+    .conn-del-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .conn-del-btn:hover {
+      color: var(--danger);
+      background: rgba(239, 68, 68, 0.12);
     }
     .form-group {
       display: flex;
@@ -1453,10 +1498,12 @@
       <div id="sbCatalogPane" style="display: none; flex: 1; flex-direction: column; overflow: hidden;">
         <div class="sidebar-section" style="padding: 10px 12px; gap: 6px;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
-            <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="sbCatalogUriLabel" title="未连接 Catalog">未连接 Catalog</span>
+            <select class="select-dropdown" id="sbCatalogProfileSelect" style="flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 10px; padding: 3px 5px;" onchange="switchCatalogProfileFromSidebar(this.value)" title="快速切换历史连接">
+              <option value="">未连接 Catalog</option>
+            </select>
             <div style="display: flex; gap: 4px; flex-shrink: 0;">
               <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="refreshCatalogTree()" title="刷新库表列表">🔄</button>
-              <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="openCatalogModal()" title="修改连接配置">⚙️ 配置</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="openCatalogModal()" title="管理连接历史与配置">⚙️ 连接</button>
             </div>
           </div>
           <input type="text" class="sidebar-search" id="sbCatalogSearchInput" placeholder="搜索库名或表名 (快速切换)..." oninput="filterSidebarCatalogTree(this.value)">
@@ -1856,6 +1903,19 @@
         <button class="btn" onclick="closeCatalogModal()">✕</button>
       </div>
       <div class="catalog-config-pane">
+        <!-- Saved Connection History List -->
+        <div class="form-group" id="connHistorySection" style="display: none;">
+          <div class="form-label">
+            <span>🕒 已保存的连接历史 (点击填充或直连)</span>
+            <span style="cursor: pointer; color: var(--accent); font-weight: 500;" onclick="resetCatalogFormForNew()">+ 新建连接</span>
+          </div>
+          <div class="conn-history-box" id="connHistoryList"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">连接名称 / 备注 (可选，留空自动使用地址)</label>
+          <input type="text" class="form-input" id="catConnName" placeholder="例如：测试环境 / 线上数仓">
+        </div>
         <div class="form-group">
           <label class="form-label">REST Catalog 地址 *</label>
           <input type="text" class="form-input" id="catRestUri" placeholder="http://127.0.0.1:8181">
@@ -1887,7 +1947,7 @@
         </div>
 
         <div id="catalogConnStatus" style="font-size: 11px; color: var(--text-dim); line-height: 1.5; margin-top: 2px;">
-          连接成功后将直接进入主界面，在左侧边栏「🗂️ 库表列表」中可随时切换查看任意表数据。
+          连接成功后将自动保存至历史记录，并在左侧边栏支持下拉快速切换不同环境。
         </div>
       </div>
       <div class="modal-footer">
