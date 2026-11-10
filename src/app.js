@@ -224,13 +224,16 @@ async function connectAndLoadCatalog(autoEnterWorkspace = false) {
     const nsCount = namespaces.length;
     const totalTables = namespaces.reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
     statusEl.innerHTML = `<span style="color: var(--success);">✓ 连接成功 (${res.elapsed_ms} ms) • 共 ${nsCount} 个 Namespace，${totalTables} 张表</span>`;
-    renderCatalogBrowser(namespaces);
     renderSidebarCatalogTree(namespaces, cfg.rest_uri);
     switchSidebarMode("catalog");
     showToast(`成功连接 Catalog，发现 ${totalTables} 张 Iceberg 表`);
 
-    // Automatically enter the main workspace and load the first available table so user can browse data & switch tables in left sidebar
-    if (autoEnterWorkspace && totalTables > 0) {
+    if (autoEnterWorkspace) {
+      closeCatalogModal();
+      document.getElementById("welcomeScreen").style.display = "none";
+      document.getElementById("mainHeader").style.display = "flex";
+      document.getElementById("appSidebar").style.display = "flex";
+
       let firstTableUri = null;
       for (const ns of namespaces) {
         if (ns.tables && ns.tables.length > 0) {
@@ -238,11 +241,8 @@ async function connectAndLoadCatalog(autoEnterWorkspace = false) {
           break;
         }
       }
-      if (firstTableUri) {
-        closeCatalogModal();
-        if (!currentFilePath || !currentFilePath.startsWith("iceberg://")) {
-          loadParquetFile(firstTableUri);
-        }
+      if (firstTableUri && (!currentFilePath || !currentFilePath.startsWith("iceberg://"))) {
+        loadParquetFile(firstTableUri);
       }
     }
   } catch (err) {
