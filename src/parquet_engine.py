@@ -14,6 +14,7 @@ _bundled_lib = os.path.join(_bundle_dir, "python_lib")
 if os.path.isdir(_bundled_lib) and _bundled_lib not in sys.path:
     sys.path.insert(0, _bundled_lib)
 
+import io
 import glob
 import json
 import time
@@ -22,6 +23,7 @@ import tempfile
 import datetime
 import decimal
 import traceback
+import concurrent.futures
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -124,6 +126,7 @@ def get_s3_filesystem(catalog_config: Optional[Dict[str, Any]] = None,
     cfg = catalog_config or get_catalog_config_from_env()
     t_cfg = table_config or {}
 
+    # User-configured S3 endpoint always takes priority over cluster-internal endpoints (e.g. minio.svc.cluster.local)
     endpoint = (
         cfg.get("s3_endpoint")
         or t_cfg.get("s3.endpoint")
@@ -242,7 +245,7 @@ def rest_api_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: fl
         raise RuntimeError(f"无法连接到 Iceberg REST Catalog ({url}): {e.reason}")
 
 
-def resolve_rest_base_and_prefix(catalog_config: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], Dict[str, Any]]:
+def resolve_rest_base_and_prefix(catalog_config: Dict[str, Any], use_cache: bool = True) -> Tuple[str, str, Dict[str, str], Dict[str, Any]]:
     """
     Returns (base_v1_url, prefix_path, auth_headers, server_defaults)
     base_v1_url is e.g. 'http://localhost:8181/v1'
@@ -265,6 +268,18 @@ def resolve_rest_base_and_prefix(catalog_config: Dict[str, Any]) -> Tuple[str, s
         headers["Authorization"] = f"Bearer {token}"
 
     user_prefix = (catalog_config.get("warehouse") or catalog_config.get("prefix") or "").strip().strip("/")
+    cache_key = hashlib.md5(f"{base_v1}|{user_prefix}".encode("utf-8")).hexdigest()
+    cfg_cache_file = os.path.join(tempfile.gettempdir(), f"pv_rest_cfg_{cache_key}.json")
+
+    if use_cache and os.path.exists(cfg_cache_file):
+        try:
+            if time.time() - os.path.getmtime(cfg_cache_file) < 300:
+                with open(cfg_cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                return base_v1, cached.get("prefix_path", ""), headers, cached.get("server_props", {})
+        except Exception:
+            pass
+
     discovered_prefix = user_prefix
     server_props: Dict[str, Any] = {}
 
@@ -282,10 +297,15 @@ def resolve_rest_base_and_prefix(catalog_config: Dict[str, Any]) -> Tuple[str, s
         elif "prefix" in defaults and defaults["prefix"]:
             discovered_prefix = str(defaults["prefix"]).strip("/")
     except Exception:
-        # /v1/config is optional in some implementations; fallback to user_prefix
         pass
 
     prefix_path = f"/{urllib.parse.quote(discovered_prefix)}" if discovered_prefix else ""
+    try:
+        with open(cfg_cache_file, "w", encoding="utf-8") as f:
+            json.dump({"prefix_path": prefix_path, "server_props": server_props}, f)
+    except Exception:
+        pass
+
     return base_v1, prefix_path, headers, server_props
 
 
@@ -294,14 +314,13 @@ def catalog_list_namespaces_and_tables(catalog_config: Optional[Dict[str, Any]] 
     cfg = catalog_config or get_catalog_config_from_env()
     save_catalog_config_cache(cfg)
 
-    base_v1, prefix_path, headers, server_props = resolve_rest_base_and_prefix(cfg)
+    base_v1, prefix_path, headers, server_props = resolve_rest_base_and_prefix(cfg, use_cache=False)
     ns_url = f"{base_v1}{prefix_path}/namespaces"
     ns_resp = rest_api_get(ns_url, headers=headers)
 
     raw_namespaces = ns_resp.get("namespaces") or []
-    namespaces_list = []
 
-    for ns_item in raw_namespaces:
+    def fetch_ns_tables(ns_item: Any) -> Dict[str, Any]:
         if isinstance(ns_item, list):
             ns_parts = [str(p) for p in ns_item]
         else:
@@ -310,32 +329,48 @@ def catalog_list_namespaces_and_tables(catalog_config: Optional[Dict[str, Any]] 
         ns_encoded = urllib.parse.quote("\x1f".join(ns_parts))
 
         tables = []
-        if len(raw_namespaces) <= 30:
-            try:
-                tbl_url = f"{base_v1}{prefix_path}/namespaces/{ns_encoded}/tables"
-                tbl_resp = rest_api_get(tbl_url, headers=headers, timeout=6.0)
-            except Exception:
+        tbl_resp = {}
+        try:
+            tbl_url = f"{base_v1}{prefix_path}/namespaces/{ns_encoded}/tables"
+            tbl_resp = rest_api_get(tbl_url, headers=headers, timeout=8.0)
+        except Exception:
+            if ns_encoded != urllib.parse.quote(ns_dot):
                 try:
                     tbl_url = f"{base_v1}{prefix_path}/namespaces/{urllib.parse.quote(ns_dot)}/tables"
-                    tbl_resp = rest_api_get(tbl_url, headers=headers, timeout=6.0)
+                    tbl_resp = rest_api_get(tbl_url, headers=headers, timeout=8.0)
                 except Exception:
                     tbl_resp = {}
 
-            for ident in (tbl_resp.get("identifiers") or []):
-                t_name = ident.get("name", "")
-                if t_name:
-                    tables.append({
-                        "name": t_name,
-                        "namespace": ns_dot,
-                        "full_name": f"{ns_dot}.{t_name}",
-                        "uri": f"iceberg://{ns_dot}/{t_name}"
-                    })
+        for ident in (tbl_resp.get("identifiers") or []):
+            t_name = ident.get("name", "")
+            if t_name:
+                tables.append({
+                    "name": t_name,
+                    "namespace": ns_dot,
+                    "full_name": f"{ns_dot}.{t_name}",
+                    "uri": f"iceberg://{ns_dot}/{t_name}"
+                })
 
-        namespaces_list.append({
+        tables.sort(key=lambda t: t["name"].lower())
+        return {
             "namespace": ns_dot,
             "namespace_parts": ns_parts,
             "tables": tables
-        })
+        }
+
+    # Fetch tables for all namespaces concurrently
+    max_workers = min(16, max(1, len(raw_namespaces)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        namespaces_list = list(executor.map(fetch_ns_tables, raw_namespaces))
+
+    # Sort namespaces: 'default' first, then namespaces with tables descending by count, then alphabetically
+    def ns_sort_key(item: Dict[str, Any]) -> Tuple[int, int, str]:
+        ns_name = item["namespace"].lower()
+        is_not_default = 0 if ns_name == "default" else 1
+        has_no_tables = 0 if len(item["tables"]) > 0 else 1
+        return (is_not_default, has_no_tables, ns_name)
+
+    namespaces_list.sort(key=ns_sort_key)
 
     elapsed = round((time.time() - t0) * 1000, 2)
     return {
@@ -366,7 +401,7 @@ def parse_iceberg_uri(uri: str) -> Tuple[str, str, Optional[str]]:
 
 
 def iceberg_type_to_arrow(ice_type: Any) -> pa.DataType:
-    """Convert an Iceberg JSON schema field type to a PyArrow DataType (used for empty tables)."""
+    """Convert an Iceberg JSON schema field type to a PyArrow DataType."""
     if isinstance(ice_type, dict):
         t_kind = ice_type.get("type", "")
         if t_kind == "struct":
@@ -411,11 +446,19 @@ def iceberg_type_to_arrow(ice_type: Any) -> pa.DataType:
     return pa.string()
 
 
+def iceberg_schema_to_arrow_schema(table_schema: Dict[str, Any]) -> pa.Schema:
+    fields = []
+    for f in (table_schema.get("fields") or []):
+        pa_t = iceberg_type_to_arrow(f.get("type", "string"))
+        fields.append(pa.field(f.get("name", "col"), pa_t, nullable=not f.get("required", False)))
+    return pa.schema(fields)
+
+
 def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[str, Any]:
     """
     Fetch Iceberg table metadata from REST Catalog and resolve active data files & delete files
     from the snapshot's manifest-list and manifests.
-    Uses a short-lived local cache (45s) so pagination/sorting doesn't re-read manifests repeatedly.
+    Uses a short-lived local cache (60s) so pagination/sorting doesn't re-read manifests repeatedly.
     """
     cfg = get_catalog_config_from_env()
     save_catalog_config_cache(cfg)
@@ -425,14 +468,14 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
 
     if not force_refresh and os.path.exists(cache_file):
         try:
-            if time.time() - os.path.getmtime(cache_file) < 45:
+            if time.time() - os.path.getmtime(cache_file) < 60:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     return json.load(f)
         except Exception:
             pass
 
     namespace, table_name, requested_snap_id = parse_iceberg_uri(uri)
-    base_v1, prefix_path, headers, server_props = resolve_rest_base_and_prefix(cfg)
+    base_v1, prefix_path, headers, server_props = resolve_rest_base_and_prefix(cfg, use_cache=True)
 
     ns_parts = namespace.split(".")
     ns_encoded = urllib.parse.quote("\x1f".join(ns_parts))
@@ -442,8 +485,11 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
         tbl_url = f"{base_v1}{prefix_path}/namespaces/{ns_encoded}/tables/{tbl_encoded}"
         load_result = rest_api_get(tbl_url, headers=headers)
     except Exception:
-        tbl_url = f"{base_v1}{prefix_path}/namespaces/{urllib.parse.quote(namespace)}/tables/{tbl_encoded}"
-        load_result = rest_api_get(tbl_url, headers=headers)
+        if ns_encoded != urllib.parse.quote(namespace):
+            tbl_url = f"{base_v1}{prefix_path}/namespaces/{urllib.parse.quote(namespace)}/tables/{tbl_encoded}"
+            load_result = rest_api_get(tbl_url, headers=headers)
+        else:
+            raise
 
     metadata = load_result.get("metadata") or load_result
     metadata_location = load_result.get("metadata-location") or ""
@@ -519,7 +565,6 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
     if target_snapshot and target_snapshot.get("manifest-list"):
         ml_uri = target_snapshot["manifest-list"]
         ml_bytes = open_uri_bytes(ml_uri, s3_fs)
-        import io
         with io.BytesIO(ml_bytes) as bio:
             ml_reader = fastavro.reader(bio)
             manifest_records = list(ml_reader)
@@ -527,11 +572,11 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
         # Sort manifests by sequence_number descending so newest schema files come first
         manifest_records.sort(key=lambda m: m.get("sequence_number") or 0, reverse=True)
 
-        for m_rec in manifest_records:
+        def read_single_manifest(m_rec: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
             m_path = m_rec.get("manifest_path", "")
             m_len = m_rec.get("manifest_length", 0)
             m_content = m_rec.get("content", 0)  # 0=DATA, 1=DELETES
-            manifests_info.append({
+            m_info = {
                 "manifest_path": m_path,
                 "name": os.path.basename(m_path.rstrip("/")),
                 "length": m_len,
@@ -541,44 +586,52 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
                 "added_files_count": m_rec.get("added_files_count", 0),
                 "existing_files_count": m_rec.get("existing_files_count", 0),
                 "deleted_files_count": m_rec.get("deleted_files_count", 0)
-            })
+            }
+            d_files = []
+            del_files = []
+            if m_path:
+                m_bytes = open_uri_bytes(m_path, s3_fs)
+                with io.BytesIO(m_bytes) as mbio:
+                    m_reader = fastavro.reader(mbio)
+                    for entry in m_reader:
+                        if entry.get("status", 1) == 2:
+                            continue
+                        df = entry.get("data_file") or {}
+                        df_path = df.get("file_path", "")
+                        if not df_path:
+                            continue
+                        df_content = df.get("content", m_content)
+                        df_size = df.get("file_size_in_bytes", 0)
+                        df_records = df.get("record_count", 0)
+                        df_format = df.get("file_format", "PARQUET")
+                        df_partition = df.get("partition") or {}
+                        f_obj = {
+                            "name": os.path.basename(df_path.rstrip("/")),
+                            "rel_path": df_path,
+                            "full_path": df_path,
+                            "size": df_size,
+                            "size_formatted": human_size(df_size),
+                            "record_count": df_records,
+                            "file_format": df_format,
+                            "partition": df_partition,
+                            "content": df_content
+                        }
+                        if df_content == 0:
+                            d_files.append(f_obj)
+                        else:
+                            del_files.append(f_obj)
+            return m_info, d_files, del_files
 
-            if not m_path:
-                continue
+        if len(manifest_records) == 1:
+            m_results = [read_single_manifest(manifest_records[0])]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(manifest_records))) as ex:
+                m_results = list(ex.map(read_single_manifest, manifest_records))
 
-            m_bytes = open_uri_bytes(m_path, s3_fs)
-            with io.BytesIO(m_bytes) as mbio:
-                m_reader = fastavro.reader(mbio)
-                for entry in m_reader:
-                    status = entry.get("status", 1)
-                    if status == 2:
-                        # 2 = DELETED
-                        continue
-                    df = entry.get("data_file") or {}
-                    df_path = df.get("file_path", "")
-                    if not df_path:
-                        continue
-                    df_content = df.get("content", m_content)
-                    df_size = df.get("file_size_in_bytes", 0)
-                    df_records = df.get("record_count", 0)
-                    df_format = df.get("file_format", "PARQUET")
-                    df_partition = df.get("partition") or {}
-
-                    f_obj = {
-                        "name": os.path.basename(df_path.rstrip("/")),
-                        "rel_path": df_path,
-                        "full_path": df_path,
-                        "size": df_size,
-                        "size_formatted": human_size(df_size),
-                        "record_count": df_records,
-                        "file_format": df_format,
-                        "partition": df_partition,
-                        "content": df_content
-                    }
-                    if df_content == 0:
-                        data_files_info.append(f_obj)
-                    else:
-                        delete_files_info.append(f_obj)
+        for m_info, d_files, del_files in m_results:
+            manifests_info.append(m_info)
+            data_files_info.extend(d_files)
+            delete_files_info.extend(del_files)
 
     plan = {
         "uri": uri,
@@ -614,23 +667,18 @@ def resolve_iceberg_table_plan(uri: str, force_refresh: bool = False) -> Dict[st
     return plan
 
 
-def build_iceberg_arrow_source(plan: Dict[str, Any]) -> Any:
+def build_iceberg_arrow_source(plan: Dict[str, Any], subset_data_files: Optional[List[Dict[str, Any]]] = None) -> Any:
     """
     Build a PyArrow Dataset or Table from an Iceberg table plan.
     Supports both S3 and local files, empty tables, and Iceberg v2 Position Deletes.
     """
     cfg = get_catalog_config_from_env()
     s3_fs = get_s3_filesystem(cfg, plan.get("table_config"))
-    data_files = plan.get("data_files") or []
+    data_files = subset_data_files if subset_data_files is not None else (plan.get("data_files") or [])
     delete_files = plan.get("delete_files") or []
 
     if not data_files:
-        # Construct empty PyArrow Table from Iceberg schema
-        fields = []
-        for f in (plan.get("table_schema", {}).get("fields") or []):
-            pa_t = iceberg_type_to_arrow(f.get("type", "string"))
-            fields.append(pa.field(f.get("name", "col"), pa_t, nullable=not f.get("required", False)))
-        schema = pa.schema(fields)
+        schema = iceberg_schema_to_arrow_schema(plan.get("table_schema") or {})
         return pa.Table.from_pylist([], schema=schema)
 
     first_path = data_files[0]["full_path"]
@@ -797,25 +845,31 @@ def arrow_type_to_spark_types(arrow_type: pa.DataType) -> Tuple[str, str, str]:
 
 
 def get_iceberg_table_info(uri: str) -> Dict[str, Any]:
-    """Get comprehensive metadata and schema info for a remote Iceberg REST Catalog table."""
+    """
+    Get comprehensive metadata and schema info for a remote Iceberg REST Catalog table.
+    Uses Iceberg metadata & manifest statistics directly so no full S3 Parquet scan is needed!
+    """
     t0 = time.time()
     plan = resolve_iceberg_table_plan(uri, force_refresh=True)
-    arrow_obj = build_iceberg_arrow_source(plan)
-
-    con = duckdb.connect(database=":memory:")
-    con.register("_iceberg_source_obj", arrow_obj)
-    con.execute("CREATE TEMPORARY VIEW data AS SELECT * FROM _iceberg_source_obj")
-
-    arrow_sample = con.execute("SELECT * FROM data LIMIT 1").fetch_arrow_table()
-    schema_arrow = arrow_sample.schema
-
-    try:
-        total_rows = con.execute("SELECT count(*) FROM data").fetchone()[0]
-    except Exception:
-        total_rows = sum(df.get("record_count", 0) for df in (plan.get("data_files") or []))
-
-    total_size = sum(df.get("size", 0) for df in (plan.get("data_files") or []))
     data_files = plan.get("data_files") or []
+    delete_files = plan.get("delete_files") or []
+    table_schema_json = plan.get("table_schema") or {}
+
+    # Derive Arrow schema directly from Iceberg schema (0 extra S3 Parquet reads!)
+    schema_arrow = iceberg_schema_to_arrow_schema(table_schema_json)
+    if len(schema_arrow) == 0 and data_files:
+        arrow_obj = build_iceberg_arrow_source(plan, subset_data_files=data_files[:1])
+        schema_arrow = arrow_obj.schema
+
+    if delete_files:
+        con = duckdb.connect(database=":memory:")
+        arrow_obj = build_iceberg_arrow_source(plan)
+        con.register("_iceberg_source_obj", arrow_obj)
+        total_rows = con.execute("SELECT count(*) FROM _iceberg_source_obj").fetchone()[0]
+    else:
+        total_rows = sum(df.get("record_count", 0) for df in data_files)
+
+    total_size = sum(df.get("size", 0) for df in data_files)
 
     columns_info = []
     spark_ddl_parts = []
@@ -840,7 +894,6 @@ def get_iceberg_table_info(uri: str) -> Dict[str, Any]:
         spark_ddl_parts.append(f"  `{name}` {spark_ddl}")
         pyspark_fields.append(f"    StructField('{name}', {pyspark_t}, {str(field.nullable)})")
 
-    table_schema_json = plan.get("table_schema") or {}
     partition_spec_json = plan.get("partition_spec") or []
     full_name = plan.get("full_name", "iceberg_table")
 
@@ -886,7 +939,7 @@ def get_iceberg_table_info(uri: str) -> Dict[str, Any]:
         "snapshots": plan.get("snapshots") or [],
         "manifests": plan.get("manifests") or [],
         "properties": plan.get("properties") or {},
-        "delete_files_count": len(plan.get("delete_files") or [])
+        "delete_files_count": len(delete_files)
     }
 
     elapsed = round((time.time() - t0) * 1000, 2)
@@ -1117,11 +1170,14 @@ def get_info(path: str) -> Dict[str, Any]:
     meta = pf.metadata
     schema_arrow = pf.schema_arrow
 
-    try:
-        count_res = con.execute(f"SELECT count(*) FROM {duckdb_source}").fetchone()
-        total_rows = count_res[0] if count_res else meta.num_rows
-    except Exception:
+    if not is_dir:
         total_rows = meta.num_rows
+    else:
+        try:
+            count_res = con.execute(f"SELECT count(*) FROM {duckdb_source}").fetchone()
+            total_rows = count_res[0] if count_res else meta.num_rows
+        except Exception:
+            total_rows = meta.num_rows
 
     columns_info = []
     spark_ddl_parts = []
@@ -1211,12 +1267,71 @@ def get_data_page(path: str, page: int = 1, page_size: int = 100,
                   sort_order: str = "ASC") -> Dict[str, Any]:
     t0 = time.time()
     con = duckdb.connect(database=":memory:")
+
+    has_search = bool(search and search.strip())
+    has_sort = bool(sort_col and sort_col.strip())
+
+    # Fast path for remote Iceberg tables when no search or sort is active:
+    # Prune data files using manifest record_count so we only read the S3 Parquet file(s) needed for this page!
+    if is_iceberg_uri(path) and not has_search and not has_sort:
+        plan = resolve_iceberg_table_plan(path)
+        data_files = plan.get("data_files") or []
+        delete_files = plan.get("delete_files") or []
+        if not delete_files:
+            filtered_total = sum(df.get("record_count", 0) for df in data_files)
+            total_pages = max(1, (filtered_total + page_size - 1) // page_size)
+            offset = max(0, (page - 1) * page_size)
+
+            if not data_files or offset >= filtered_total:
+                schema = iceberg_schema_to_arrow_schema(plan.get("table_schema") or {})
+                return {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_rows": filtered_total,
+                    "total_pages": total_pages,
+                    "columns": schema.names,
+                    "rows": [],
+                    "elapsed_ms": round((time.time() - t0) * 1000, 2)
+                }
+
+            # Select only the data files overlapping [offset, offset + page_size)
+            selected_files = []
+            cum_rows = 0
+            local_offset = 0
+            target_end = offset + page_size
+            for df in data_files:
+                rc = df.get("record_count", 0)
+                if rc <= 0:
+                    continue
+                file_start = cum_rows
+                file_end = cum_rows + rc
+                if file_end > offset and file_start < target_end:
+                    if not selected_files:
+                        local_offset = offset - file_start
+                    selected_files.append(df)
+                cum_rows = file_end
+                if cum_rows >= target_end:
+                    break
+
+            arrow_obj = build_iceberg_arrow_source(plan, subset_data_files=selected_files or data_files[:1])
+            con.register("_page_source_obj", arrow_obj)
+            arrow_tbl = con.execute(f"SELECT * FROM _page_source_obj LIMIT {page_size} OFFSET {local_offset}").fetch_arrow_table()
+            return {
+                "page": page,
+                "page_size": page_size,
+                "total_rows": filtered_total,
+                "total_pages": total_pages,
+                "columns": arrow_tbl.column_names,
+                "rows": arrow_tbl.to_pylist(),
+                "elapsed_ms": round((time.time() - t0) * 1000, 2)
+            }
+
     register_source_in_duckdb(con, path, view_name="table_view")
     
     where_clause = ""
     col_names = [col[0] for col in con.execute("DESCRIBE table_view").fetchall()]
     
-    if search and search.strip():
+    if has_search and search:
         kw = search.strip().replace("'", "''")
         conditions = []
         for c in col_names:

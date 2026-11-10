@@ -243,19 +243,22 @@ function renderCatalogBrowser(namespaces) {
   }
 
   let html = "";
-  for (const nsObj of namespaces) {
+  for (let i = 0; i < namespaces.length; i++) {
+    const nsObj = namespaces[i];
     const nsName = nsObj.namespace || "(default)";
     const tables = nsObj.tables || [];
+    const isExpanded = i < 3 || namespaces.length <= 8;
     html += `
       <div class="catalog-ns-card" data-ns="${escapeAttr(nsName.toLowerCase())}">
-        <div class="catalog-ns-header">
-          <div style="display: flex; align-items: center; gap: 6px;">
+        <div class="catalog-ns-header" style="cursor: pointer;" onclick="toggleCatalogNs(this)">
+          <div style="display: flex; align-items: center; gap: 6px; min-width: 0;">
+            <span class="ns-arrow" style="font-size: 10px; color: var(--text-dim); width: 12px; display: inline-block;">${isExpanded ? '▼' : '▶'}</span>
             <span>🗂️</span>
-            <span style="font-family: var(--font-mono);">${escapeHtml(nsName)}</span>
+            <span style="font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(nsName)}</span>
           </div>
-          <span class="pill-badge">${tables.length} 张表</span>
+          <span class="pill-badge accent">${tables.length} 张表</span>
         </div>
-        <div class="catalog-table-list">
+        <div class="catalog-table-list" style="display: ${isExpanded ? 'flex' : 'none'};">
     `;
 
     if (tables.length === 0) {
@@ -283,14 +286,29 @@ function renderCatalogBrowser(namespaces) {
   container.innerHTML = html;
 }
 
+function toggleCatalogNs(headerEl) {
+  const card = headerEl.closest(".catalog-ns-card");
+  if (!card) return;
+  const list = card.querySelector(".catalog-table-list");
+  const arrow = card.querySelector(".ns-arrow");
+  if (!list) return;
+  const isHidden = list.style.display === "none";
+  list.style.display = isHidden ? "flex" : "none";
+  if (arrow) arrow.textContent = isHidden ? "▼" : "▶";
+}
+
 function filterCatalogTables(kw) {
   const clean = kw.trim().toLowerCase();
-  document.querySelectorAll("#catalogNsList .catalog-ns-card").forEach(card => {
+  document.querySelectorAll("#catalogNsList .catalog-ns-card").forEach((card, idx) => {
     const nsName = card.getAttribute("data-ns") || "";
+    const list = card.querySelector(".catalog-table-list");
+    const arrow = card.querySelector(".ns-arrow");
     const items = card.querySelectorAll(".catalog-table-item");
     if (!clean) {
       card.style.display = "";
       items.forEach(it => it.style.display = "");
+      if (list) list.style.display = idx < 3 ? "flex" : "none";
+      if (arrow) arrow.textContent = idx < 3 ? "▼" : "▶";
       return;
     }
     let anyVisible = false;
@@ -300,7 +318,12 @@ function filterCatalogTables(kw) {
       it.style.display = match ? "" : "none";
       if (match) anyVisible = true;
     });
-    card.style.display = (anyVisible || nsName.includes(clean)) ? "" : "none";
+    const showCard = anyVisible || nsName.includes(clean);
+    card.style.display = showCard ? "" : "none";
+    if (showCard && list) {
+      list.style.display = "flex";
+      if (arrow) arrow.textContent = "▼";
+    }
   });
 }
 
