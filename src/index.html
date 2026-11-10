@@ -405,6 +405,129 @@
       gap: 2px;
       font-size: 11px;
       cursor: default;
+      transition: background 0.12s;
+    }
+    .sidebar-part-item.clickable {
+      cursor: pointer;
+    }
+    .sidebar-part-item.clickable:hover {
+      background: var(--bg-hover);
+    }
+
+    /* Iceberg REST Catalog Modal Styles */
+    .catalog-modal-box {
+      max-width: 820px;
+      width: 92%;
+      max-height: 85vh;
+    }
+    .catalog-modal-body {
+      display: grid;
+      grid-template-columns: 330px 1fr;
+      min-height: 440px;
+      max-height: 68vh;
+      overflow: hidden;
+      background: var(--bg-primary);
+    }
+    .catalog-config-pane {
+      padding: 16px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+      overflow-y: auto;
+    }
+    .catalog-browser-pane {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      background: var(--bg-primary);
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .form-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .form-input {
+      width: 100%;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text-main);
+      outline: none;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .form-input:focus {
+      border-color: var(--border-focus);
+    }
+    .catalog-ns-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+    }
+    .catalog-ns-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .catalog-ns-header {
+      padding: 7px 12px;
+      background: var(--bg-sidebar);
+      border-bottom: 1px solid var(--border-color);
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .catalog-table-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .catalog-table-item {
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border-color);
+      transition: background 0.12s;
+    }
+    .catalog-table-item:last-child {
+      border-bottom: none;
+    }
+    .catalog-table-item:hover {
+      background: var(--bg-hover);
+    }
+    .btn-iceberg-accent {
+      background: rgba(6, 182, 212, 0.16);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: #06b6d4;
+    }
+    .btn-iceberg-accent:hover {
+      background: rgba(6, 182, 212, 0.26);
+      color: #22d3ee;
     }
     .sidebar-part-name {
       font-family: var(--font-mono);
@@ -1261,6 +1384,12 @@
 
     <!-- Actions -->
     <div class="header-actions">
+      <button class="btn" id="btnBackHistory" style="display: none;" onclick="navigateBack()" title="返回上一级表或清单文件">
+        <span>⬅</span> 返回上级
+      </button>
+      <button class="btn btn-iceberg-accent" onclick="openCatalogModal()">
+        <span>🧊</span> Iceberg Catalog
+      </button>
       <button class="btn" onclick="openFileDialog()">
         <span>📂</span> 打开文件
       </button>
@@ -1291,24 +1420,40 @@
         </div>
       </div>
 
-      <!-- Iceberg Metadata Section (Shown when Iceberg Avro) -->
+      <!-- Iceberg Metadata Section (Shown when Iceberg Avro or Catalog Table) -->
       <div class="sidebar-section" id="sbIcebergSection" style="display: none;">
         <div class="sidebar-title">
           <span>🧊 Iceberg 元数据</span>
           <span class="pill-badge iceberg" id="sbIcebergBadge">MANIFEST</span>
         </div>
-        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; display: flex; flex-direction: column; gap: 5px;">
           <div id="sbIcebergTypeRow">类型: <strong id="sbIcebergTypeVal" style="color: var(--text-main);">-</strong></div>
+          <div id="sbIcebergSnapSelectRow" style="display: none;">
+            <div style="margin-bottom: 2px;">快照版本 (Time Travel):</div>
+            <select class="select-dropdown" id="sbIcebergSnapSelect" style="width: 100%; font-family: var(--font-mono); font-size: 10px;" onchange="switchIcebergSnapshot(this.value)"></select>
+          </div>
           <div id="sbIcebergSnapRow" style="display: none;">Snapshot ID: <strong id="sbIcebergSnapVal" style="color: var(--text-main); font-family: var(--font-mono); font-size: 10px; word-break: break-all;">-</strong></div>
           <div id="sbIcebergSeqRow" style="display: none;">Seq No: <strong id="sbIcebergSeqVal" style="color: var(--text-main);">-</strong></div>
           <div id="sbIcebergSpecRow" style="display: none;">分区规则: <strong id="sbIcebergSpecVal" style="color: var(--text-main);">-</strong></div>
+          <button class="btn" id="sbOpenSnapAvroBtn" style="display: none; margin-top: 2px; font-size: 11px; justify-content: center;" onclick="openCurrentSnapshotManifestList()">
+            <span>📄</span> 查看快照清单 (snap.avro)
+          </button>
         </div>
       </div>
 
-      <!-- Partitions Section (Shown when directory with multiple parts) -->
+      <!-- Iceberg Manifests Section (Shown for Catalog Table) -->
+      <div class="sidebar-section" id="sbManifestsSection" style="display: none;">
+        <div class="sidebar-title">
+          <span>Manifest 清单文件</span>
+          <span class="pill-badge iceberg" id="sbManifestsCount">0</span>
+        </div>
+        <div id="sbManifestsList" style="max-height: 110px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+      </div>
+
+      <!-- Partitions Section (Shown when directory with multiple parts or Iceberg data files) -->
       <div class="sidebar-section" id="sbPartsSection" style="display: none;">
         <div class="sidebar-title">
-          <span>分片文件</span>
+          <span id="sbPartsTitle">分片文件</span>
           <span class="pill-badge" id="sbPartsCount">0</span>
         </div>
         <div id="sbPartsList" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
@@ -1353,7 +1498,8 @@
 
           <div style="font-size: 11px; color: var(--text-dim); line-height: 1.5; border-top: 1px solid var(--border-color); padding-top: 12px;">
             <div>快捷键:</div>
-            <div>• <strong style="color: var(--text-muted);">Cmd + O</strong> 打开文件</div>
+            <div>• <strong style="color: var(--text-muted);">Cmd + O</strong> 打开本地文件</div>
+            <div>• <strong style="color: var(--text-muted);">Cmd + K</strong> 连接远程 Iceberg Catalog</div>
             <div>• <strong style="color: var(--text-muted);">Cmd + Enter</strong> 运行 SQL 查询</div>
             <div>• <strong style="color: var(--text-muted);">Cmd + B</strong> 切换左侧边栏</div>
           </div>
@@ -1371,11 +1517,16 @@
             <div class="drop-zone-title">拖拽 Parquet / Iceberg Avro 文件或目录到这里</div>
             <div class="drop-zone-subtitle">
               告别繁琐缓慢的 spark-shell 启动，即开即看。<br>
-              全面支持 Parquet 单文件与分区目录、Iceberg 快照/清单 Avro 元数据，内置 DuckDB 闪电查询。
+              全面支持 Parquet 单文件与分区目录、Iceberg 快照/清单 Avro 元数据、远程 Iceberg REST Catalog 表数据查询。
             </div>
-            <button class="btn btn-primary" onclick="event.stopPropagation(); openFileDialog()">
-              <span>📂</span> 选择 Parquet / Iceberg Avro 文件 (Cmd+O)
-            </button>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+              <button class="btn btn-primary" onclick="event.stopPropagation(); openFileDialog()">
+                <span>📂</span> 选择本地文件 (Cmd+O)
+              </button>
+              <button class="btn btn-iceberg-accent" onclick="event.stopPropagation(); openCatalogModal()">
+                <span>🧊</span> 连接远程 Iceberg REST Catalog (Cmd+K)
+              </button>
+            </div>
           </div>
 
           <div class="demo-buttons-row">
@@ -1629,6 +1780,76 @@
       </div>
 
     </section>
+  </div>
+
+  <!-- Iceberg REST Catalog Connection & Browser Modal -->
+  <div class="modal-overlay" id="catalogModal" onclick="closeCatalogModal()">
+    <div class="modal-box catalog-modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title" style="display: flex; align-items: center; gap: 8px;">
+          <span>🧊</span> 远程 Iceberg REST Catalog 连接与表浏览
+        </div>
+        <button class="btn" onclick="closeCatalogModal()">✕</button>
+      </div>
+      <div class="catalog-modal-body">
+        <!-- Left Config Form -->
+        <div class="catalog-config-pane">
+          <div class="form-group">
+            <label class="form-label">REST Catalog 地址 *</label>
+            <input type="text" class="form-input" id="catRestUri" placeholder="http://127.0.0.1:8181">
+          </div>
+          <div class="form-group">
+            <label class="form-label">S3 Endpoint 地址 *</label>
+            <input type="text" class="form-input" id="catS3Endpoint" placeholder="http://127.0.0.1:9000">
+          </div>
+          <div class="form-group">
+            <label class="form-label">S3 Access Key (AK) *</label>
+            <input type="text" class="form-input" id="catS3Ak" placeholder="admin / AKIA...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">
+              <span>S3 Secret Key (SK) *</span>
+              <span style="cursor: pointer; color: var(--accent); font-weight: normal;" onclick="toggleSkVisibility()" id="toggleSkBtn">显示</span>
+            </label>
+            <input type="password" class="form-input" id="catS3Sk" placeholder="••••••••">
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="form-group">
+              <label class="form-label">Warehouse / Prefix (可选)</label>
+              <input type="text" class="form-input" id="catWarehouse" placeholder="自动识别">
+            </div>
+            <div class="form-group">
+              <label class="form-label">S3 Region (可选)</label>
+              <input type="text" class="form-input" id="catS3Region" placeholder="us-east-1" value="us-east-1">
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="btnConnectCatalog" style="justify-content: center; padding: 8px 12px; margin-top: 4px;" onclick="connectAndLoadCatalog()">
+            <span id="connectCatalogIcon">🔌</span> 连接并加载库表列表
+          </button>
+
+          <div id="catalogConnStatus" style="font-size: 11px; color: var(--text-dim); line-height: 1.5; margin-top: 2px;">
+            配置将自动保存在本地，点击表名即可直接预览数据与执行 DuckDB SQL。
+          </div>
+        </div>
+
+        <!-- Right Namespace & Table Browser -->
+        <div class="catalog-browser-pane">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-main);" id="catalogBrowserTitle">Namespace 与数据表列表</span>
+            <input type="text" class="sidebar-search" id="catalogTableSearch" style="width: 190px;" placeholder="搜索 namespace 或表名..." oninput="filterCatalogTables(this.value)">
+          </div>
+          <div class="catalog-ns-list" id="catalogNsList">
+            <div style="font-size: 12px; color: var(--text-dim); text-align: center; padding: 60px 20px;">
+              请在左侧填写 REST Catalog 与 S3 参数后点击「连接并加载库表列表」
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeCatalogModal()">关闭</button>
+      </div>
+    </div>
   </div>
 
   <!-- Cell Value Inspector Modal -->

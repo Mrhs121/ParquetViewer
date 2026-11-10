@@ -64,8 +64,9 @@
 ## ✨ 核心特性
 
 - **🚀 毫秒级极速渲染**：基于 DuckDB 与 PyArrow，百万行数据集按需分页、列宽自适应，丝滑流畅。
-- **🧊 Apache Iceberg 深度集成**：
-  - 自动识别并解析 Iceberg Manifest（清单）与 Manifest List（快照列表）。
+- **🧊 Apache Iceberg 深度集成（本地 Avro + 远程 REST Catalog）**：
+  - **远程 Iceberg REST Catalog 直连 (`Cmd + K`)**：配置 `REST Catalog 地址`、`S3 Endpoint`、`S3 Access Key (AK)` 与 `S3 Secret Key (SK)`，即可一键浏览远端 Namespace 与表列表、直接分页预览远端 S3 表数据、执行 DuckDB SQL、切换历史快照版本（Time Travel），并支持一键下钻查看底层 S3 上的 Snapshot Avro、Manifest Avro 与 Parquet 数据文件。
+  - 自动识别并解析本地或 S3 上的 Iceberg Manifest（清单）与 Manifest List（快照列表）。
   - 深度提取 Snapshot ID、Parent Snapshot ID、Sequence Number、Partition Spec 等关键元数据。
   - 逆向还原 Iceberg 业务数据表结构并生成规范的 **Iceberg SQL 建表 DDL**。
 - **📋 表结构与 DDL 逆向生成**：
@@ -164,6 +165,7 @@ pview /path/to/metadata/snap-7973159704479772107-0-86b2d965-78cc-4a0f-ac6f-73e90
 | 快捷键 | 功能说明 |
 | :--- | :--- |
 | **Cmd + O** | 弹出原生文件选择对话框 |
+| **Cmd + K** | 打开远程 Iceberg REST Catalog 连接与表浏览器 |
 | **Cmd + Enter** | 在 SQL Studio 中执行当前 SQL 查询 |
 | **Cmd + B** | 切换显示 / 隐藏左侧字段边栏 |
 | **Cmd + R** | 刷新重载当前文件 |

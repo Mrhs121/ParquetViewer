@@ -18,16 +18,40 @@ let pageLoadId = 0;
 let queryLoadId = 0;
 let isPageLoading = false;
 let isQueryRunning = false;
+let isCatalogConnecting = false;
+let lastCatalogData = null;
+const navigationStack = [];
 const pendingRequests = new Map();
+
+// Helper: Get saved Iceberg Catalog Configuration
+function getCatalogConfig() {
+  try {
+    return JSON.parse(localStorage.getItem("pv_iceberg_catalog_config") || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveCatalogConfig(cfg) {
+  localStorage.setItem("pv_iceberg_catalog_config", JSON.stringify(cfg));
+}
 
 // Helper: Native Bridge Communication
 function sendToNative(action, payload = {}) {
   return new Promise((resolve, reject) => {
     const reqId = "req_" + (++reqCounter);
+    // Attach catalogConfig automatically for data/catalog operations
+    if (["info", "page", "query", "exportDialog", "catalog_namespaces"].includes(action) && !payload.catalogConfig) {
+      const cfg = getCatalogConfig();
+      if (cfg && (cfg.rest_uri || cfg.s3_endpoint || cfg.s3_access_key)) {
+        payload = { ...payload, catalogConfig: JSON.stringify(cfg) };
+      }
+    }
+
     // Dialogs are user-paced; only data requests have a delivery deadline.
-    const timeout = ["info", "page", "query"].includes(action) ? setTimeout(() => {
+    const timeout = ["info", "page", "query", "catalog_namespaces"].includes(action) ? setTimeout(() => {
       if (pendingRequests.delete(reqId)) {
-        reject(new Error("后台响应超时，请重试或缩小查询范围"));
+        reject(new Error("后台响应超时，请检查网络连接或缩小查询范围"));
       }
     }, 75000) : null;
     pendingRequests.set(reqId, { resolve, reject, timeout });
@@ -77,6 +101,8 @@ window.loadFile = function(path) {
   loadParquetFile(path);
 };
 
+window.openCatalogModal = openCatalogModal;
+
 // macOS owns file drops because WKWebView's JavaScript File objects have no native path.
 window.setNativeDragActive = function(active) {
   document.getElementById("dropZone")?.classList.toggle("dragover", active);
@@ -85,6 +111,7 @@ window.setNativeDragActive = function(active) {
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
   initRecentFiles();
+  initCatalogConfigForm();
   initShortcuts();
 });
 
@@ -95,6 +122,11 @@ function initShortcuts() {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") {
       e.preventDefault();
       openFileDialog();
+    }
+    // Cmd+K: Open Remote Iceberg Catalog Modal
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      openCatalogModal();
     }
     // Cmd+R: Reload
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r" && currentFilePath) {
@@ -111,7 +143,219 @@ function initShortcuts() {
       e.preventDefault();
       executeSqlQuery();
     }
+    // Escape: close modals
+    if (e.key === "Escape") {
+      closeCellModal();
+      closeCatalogModal();
+    }
   });
+}
+
+// ============================================================================
+// Iceberg REST Catalog Modal & Browser Logic
+// ============================================================================
+
+function initCatalogConfigForm() {
+  const cfg = getCatalogConfig();
+  if (cfg.rest_uri) document.getElementById("catRestUri").value = cfg.rest_uri;
+  if (cfg.s3_endpoint) document.getElementById("catS3Endpoint").value = cfg.s3_endpoint;
+  if (cfg.s3_access_key) document.getElementById("catS3Ak").value = cfg.s3_access_key;
+  if (cfg.s3_secret_key) document.getElementById("catS3Sk").value = cfg.s3_secret_key;
+  if (cfg.warehouse) document.getElementById("catWarehouse").value = cfg.warehouse;
+  if (cfg.s3_region) document.getElementById("catS3Region").value = cfg.s3_region;
+}
+
+function readCatalogFormValues() {
+  return {
+    rest_uri: document.getElementById("catRestUri").value.trim(),
+    s3_endpoint: document.getElementById("catS3Endpoint").value.trim(),
+    s3_access_key: document.getElementById("catS3Ak").value.trim(),
+    s3_secret_key: document.getElementById("catS3Sk").value.trim(),
+    warehouse: document.getElementById("catWarehouse").value.trim(),
+    s3_region: document.getElementById("catS3Region").value.trim() || "us-east-1"
+  };
+}
+
+function openCatalogModal() {
+  initCatalogConfigForm();
+  document.getElementById("catalogModal").classList.add("active");
+}
+
+function closeCatalogModal() {
+  document.getElementById("catalogModal")?.classList.remove("active");
+}
+
+function toggleSkVisibility() {
+  const skInput = document.getElementById("catS3Sk");
+  const btn = document.getElementById("toggleSkBtn");
+  if (skInput.type === "password") {
+    skInput.type = "text";
+    btn.textContent = "隐藏";
+  } else {
+    skInput.type = "password";
+    btn.textContent = "显示";
+  }
+}
+
+async function connectAndLoadCatalog() {
+  if (isCatalogConnecting) return;
+  const cfg = readCatalogFormValues();
+  if (!cfg.rest_uri) {
+    showToast("请填写 REST Catalog 地址", "warning");
+    document.getElementById("catRestUri").focus();
+    return;
+  }
+
+  saveCatalogConfig(cfg);
+  isCatalogConnecting = true;
+  const btn = document.getElementById("btnConnectCatalog");
+  const icon = document.getElementById("connectCatalogIcon");
+  const statusEl = document.getElementById("catalogConnStatus");
+  btn.disabled = true;
+  icon.innerHTML = '<span class="spinner"></span>';
+  statusEl.innerHTML = `<span style="color: var(--accent);">正在连接 ${escapeHtml(cfg.rest_uri)} 获取库表列表...</span>`;
+
+  try {
+    const res = await sendToNative("catalog_namespaces", {
+      catalogConfig: JSON.stringify(cfg)
+    });
+    lastCatalogData = res;
+    const nsCount = (res.namespaces || []).length;
+    const totalTables = (res.namespaces || []).reduce((acc, ns) => acc + (ns.tables ? ns.tables.length : 0), 0);
+    statusEl.innerHTML = `<span style="color: var(--success);">✓ 连接成功 (${res.elapsed_ms} ms) • 共 ${nsCount} 个 Namespace，${totalTables} 张表</span>`;
+    renderCatalogBrowser(res.namespaces || []);
+    showToast(`成功连接 Catalog，发现 ${totalTables} 张 Iceberg 表`);
+  } catch (err) {
+    statusEl.innerHTML = `<span style="color: var(--danger);">✕ 连接失败: ${escapeHtml(err.message)}</span>`;
+    showToast("连接 Iceberg Catalog 失败: " + err.message, "danger");
+  } finally {
+    isCatalogConnecting = false;
+    btn.disabled = false;
+    icon.textContent = "🔌";
+  }
+}
+
+function renderCatalogBrowser(namespaces) {
+  const container = document.getElementById("catalogNsList");
+  if (!namespaces || namespaces.length === 0) {
+    container.innerHTML = `<div style="font-size: 12px; color: var(--text-dim); text-align: center; padding: 50px 20px;">未在该 Catalog 下找到任何 Namespace</div>`;
+    return;
+  }
+
+  let html = "";
+  for (const nsObj of namespaces) {
+    const nsName = nsObj.namespace || "(default)";
+    const tables = nsObj.tables || [];
+    html += `
+      <div class="catalog-ns-card" data-ns="${escapeAttr(nsName.toLowerCase())}">
+        <div class="catalog-ns-header">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span>🗂️</span>
+            <span style="font-family: var(--font-mono);">${escapeHtml(nsName)}</span>
+          </div>
+          <span class="pill-badge">${tables.length} 张表</span>
+        </div>
+        <div class="catalog-table-list">
+    `;
+
+    if (tables.length === 0) {
+      html += `<div style="padding: 8px 12px; font-size: 11px; color: var(--text-dim);">该 Namespace 下暂无数据表</div>`;
+    } else {
+      for (const tbl of tables) {
+        html += `
+          <div class="catalog-table-item" data-search="${escapeAttr(( tbl.full_name || tbl.name ).toLowerCase())}" onclick="selectCatalogTable('${escapeAttr(tbl.uri)}')">
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+              <span>🧊</span>
+              <span style="font-family: var(--font-mono); font-weight: 600; color: var(--text-main);">${escapeHtml(tbl.name)}</span>
+              <span style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">${escapeHtml(tbl.full_name)}</span>
+            </div>
+            <span style="font-size: 11px; color: var(--accent); font-weight: 500; flex-shrink: 0;">加载表数据 ›</span>
+          </div>
+        `;
+      }
+    }
+
+    html += `
+        </div>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+}
+
+function filterCatalogTables(kw) {
+  const clean = kw.trim().toLowerCase();
+  document.querySelectorAll("#catalogNsList .catalog-ns-card").forEach(card => {
+    const nsName = card.getAttribute("data-ns") || "";
+    const items = card.querySelectorAll(".catalog-table-item");
+    if (!clean) {
+      card.style.display = "";
+      items.forEach(it => it.style.display = "");
+      return;
+    }
+    let anyVisible = false;
+    items.forEach(it => {
+      const s = it.getAttribute("data-search") || "";
+      const match = s.includes(clean) || nsName.includes(clean);
+      it.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    card.style.display = (anyVisible || nsName.includes(clean)) ? "" : "none";
+  });
+}
+
+function selectCatalogTable(uri) {
+  closeCatalogModal();
+  navigationStack.length = 0;
+  updateBackButtonUI();
+  loadParquetFile(uri);
+}
+
+// ============================================================================
+// Navigation History (Drill down between Iceberg Table <-> Manifest <-> Parquet)
+// ============================================================================
+
+function openLinkedPath(targetPath) {
+  if (!targetPath) return;
+  if (currentFilePath && currentFilePath !== targetPath) {
+    navigationStack.push(currentFilePath);
+    updateBackButtonUI();
+  }
+  loadParquetFile(targetPath);
+}
+
+function navigateBack() {
+  if (navigationStack.length === 0) return;
+  const prevPath = navigationStack.pop();
+  updateBackButtonUI();
+  loadParquetFile(prevPath);
+}
+
+function updateBackButtonUI() {
+  const btn = document.getElementById("btnBackHistory");
+  if (!btn) return;
+  if (navigationStack.length > 0) {
+    btn.style.display = "inline-flex";
+    const prev = navigationStack[navigationStack.length - 1];
+    btn.title = `返回: ${prev}`;
+  } else {
+    btn.style.display = "none";
+  }
+}
+
+function switchIcebergSnapshot(snapId) {
+  if (!currentFilePath || !currentFilePath.startsWith("iceberg://")) return;
+  const baseUri = currentFilePath.split("@")[0];
+  const targetUri = snapId ? `${baseUri}@${snapId}` : baseUri;
+  if (targetUri !== currentFilePath) {
+    loadParquetFile(targetUri);
+  }
+}
+
+function openCurrentSnapshotManifestList() {
+  if (currentInfo && currentInfo.iceberg_info && currentInfo.iceberg_info.manifest_list) {
+    openLinkedPath(currentInfo.iceberg_info.manifest_list);
+  }
 }
 
 // Sidebar toggle
@@ -145,7 +389,11 @@ function switchTab(tabName) {
 function openFileDialog() {
   sendToNative("openFileDialog")
     .then(path => {
-      if (path) loadParquetFile(path);
+      if (path) {
+        navigationStack.length = 0;
+        updateBackButtonUI();
+        loadParquetFile(path);
+      }
     })
     .catch(err => {
       console.log("Open file dialog cancelled:", err);
@@ -155,7 +403,7 @@ function openFileDialog() {
 // Export Dialog via Swift
 function exportDataDialog() {
   if (!currentFilePath) {
-    showToast("请先打开一个 Parquet 文件", "warning");
+    showToast("请先打开一个文件或数据表", "warning");
     return;
   }
   const currentSql = document.getElementById("sqlEditor").value.trim() || "SELECT * FROM data";
@@ -178,7 +426,11 @@ function reloadCurrentFile() {
 // Load Built-in Sample Dataset
 function loadSample(name) {
   sendToNative("getSamplePath", { name: name }).then(path => {
-    if (path) loadParquetFile(path);
+    if (path) {
+      navigationStack.length = 0;
+      updateBackButtonUI();
+      loadParquetFile(path);
+    }
   }).catch(err => {
     showToast("无法加载内置示例: " + err.message, "warning");
   });
@@ -188,7 +440,9 @@ function loadSample(name) {
 async function loadParquetFile(path) {
   const loadId = ++fileLoadId;
   try {
-    showToast("正在读取元数据...", "info");
+    const isRemoteTable = path.startsWith("iceberg://");
+    const isS3File = path.startsWith("s3://") || path.startsWith("s3a://");
+    showToast(isRemoteTable ? "正在从远程 Iceberg Catalog 加载表数据..." : (isS3File ? "正在从 S3 读取文件元数据..." : "正在读取元数据..."), "info");
     const info = await sendToNative("info", { path: path });
     if (loadId !== fileLoadId) return;
     ++pageLoadId;
@@ -198,15 +452,21 @@ async function loadParquetFile(path) {
     currentFilePath = path;
     currentInfo = info;
     saveRecentFile(path, info.file_name);
+    updateBackButtonUI();
 
     // Update Header
     document.getElementById("welcomeScreen").style.display = "none";
     document.getElementById("mainHeader").style.display = "flex";
     document.getElementById("appSidebar").style.display = "flex";
     
-    document.getElementById("hdrFileName").textContent = info.file_name + (info.is_dir ? " (多分区目录)" : "");
+    const suffix = info.format_type === "iceberg_table"
+      ? ` (${info.file_count} 个数据文件)`
+      : (info.is_dir ? " (多分区目录)" : "");
+    document.getElementById("hdrFileName").textContent = info.file_name + suffix;
     document.getElementById("hdrFileName").title = info.path;
-    document.getElementById("hdrFilePath").textContent = info.path;
+    document.getElementById("hdrFilePath").textContent = (info.iceberg_info && info.iceberg_info.location)
+      ? `${info.path}  →  ${info.iceberg_info.location}`
+      : info.path;
     document.getElementById("hdrRowsBadge").textContent = formatNumber(info.total_rows) + " 行";
     document.getElementById("hdrColsBadge").textContent = info.num_columns + " 列";
     document.getElementById("hdrSizeBadge").textContent = info.file_size_formatted;
@@ -214,11 +474,12 @@ async function loadParquetFile(path) {
     // Header Format and Iceberg Badges
     const badgeIcon = document.getElementById("hdrBadgeIcon");
     const formatBadge = document.getElementById("hdrFormatBadge");
+    const isIceberg = Boolean(info.iceberg_info && info.iceberg_info.is_iceberg);
     if (badgeIcon && formatBadge) {
       badgeIcon.className = "file-badge-icon";
       formatBadge.className = "pill-badge";
 
-      if (info.iceberg_info) {
+      if (isIceberg) {
         badgeIcon.textContent = "🧊";
         badgeIcon.classList.add("iceberg");
         formatBadge.textContent = info.iceberg_info.badge || "ICEBERG";
@@ -230,7 +491,7 @@ async function loadParquetFile(path) {
         formatBadge.classList.add("avro");
       } else {
         badgeIcon.textContent = "PQ";
-        formatBadge.textContent = "PARQUET";
+        formatBadge.textContent = isS3File ? "S3 PARQUET" : "PARQUET";
         formatBadge.classList.add("accent");
       }
     }
@@ -263,13 +524,15 @@ async function loadParquetFile(path) {
     const loaded = await loadDataPage(1);
 
     if (loaded && loadId === fileLoadId) {
-      const typeLabel = info.iceberg_info ? "Iceberg 元数据" : (info.format_type === "avro" ? "Avro 文件" : "Parquet 文件");
+      const typeLabel = info.format_type === "iceberg_table"
+        ? "Iceberg 表记录"
+        : (isIceberg ? "Iceberg 元数据" : (info.format_type === "avro" ? "Avro 文件" : "Parquet 文件"));
       showToast(`已加载 ${info.file_name} (${formatNumber(info.total_rows)} 行 ${typeLabel})`, "success");
     }
   } catch (err) {
     if (loadId !== fileLoadId) return;
     console.error("加载文件失败:", err);
-    showToast("打开文件失败: " + err.message, "danger");
+    showToast("打开失败: " + err.message, "danger");
   }
 }
 
@@ -280,14 +543,33 @@ function renderSidebar(info) {
   document.getElementById("sbColsVal").textContent = info.num_columns;
   document.getElementById("sbSizeVal").textContent = info.file_size_formatted;
 
+  const isIceberg = Boolean(info.iceberg_info && info.iceberg_info.is_iceberg);
+
   // Iceberg Section
   const sbIcebergSection = document.getElementById("sbIcebergSection");
+  const sbManifestsSection = document.getElementById("sbManifestsSection");
   if (sbIcebergSection) {
-    if (info.iceberg_info) {
+    if (isIceberg) {
       sbIcebergSection.style.display = "flex";
       const ice = info.iceberg_info;
-      document.getElementById("sbIcebergBadge").textContent = ice.type === "manifest_list" ? "SNAPSHOT" : "MANIFEST";
-      document.getElementById("sbIcebergTypeVal").textContent = ice.title || (ice.type === "manifest_list" ? "快照清单 (Manifest List)" : "数据清单 (Manifest)");
+      document.getElementById("sbIcebergBadge").textContent =
+        ice.type === "catalog_table" ? "CATALOG TABLE" : (ice.type === "manifest_list" ? "SNAPSHOT" : "MANIFEST");
+      document.getElementById("sbIcebergTypeVal").textContent = ice.title || "Iceberg 数据";
+
+      // Snapshot selector (for catalog_table)
+      const snapSelectRow = document.getElementById("sbIcebergSnapSelectRow");
+      const snapSelect = document.getElementById("sbIcebergSnapSelect");
+      if (snapSelectRow && snapSelect) {
+        if (ice.snapshots && Array.isArray(ice.snapshots) && ice.snapshots.length > 0) {
+          snapSelectRow.style.display = "block";
+          snapSelect.innerHTML = ice.snapshots.map(s => {
+            const label = `${s.snapshot_id.slice(-8)} (${s.timestamp_formatted}${s.is_current ? ' • 当前' : ''})`;
+            return `<option value="${escapeAttr(s.snapshot_id)}" ${s.is_selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+          }).join("");
+        } else {
+          snapSelectRow.style.display = "none";
+        }
+      }
 
       const snapRow = document.getElementById("sbIcebergSnapRow");
       if (snapRow) {
@@ -301,7 +583,7 @@ function renderSidebar(info) {
 
       const seqRow = document.getElementById("sbIcebergSeqRow");
       if (seqRow) {
-        if (ice.sequence_number) {
+        if (ice.sequence_number !== undefined && ice.sequence_number !== null) {
           seqRow.style.display = "block";
           document.getElementById("sbIcebergSeqVal").textContent = ice.sequence_number;
         } else {
@@ -318,23 +600,52 @@ function renderSidebar(info) {
           specRow.style.display = "none";
         }
       }
+
+      const openSnapBtn = document.getElementById("sbOpenSnapAvroBtn");
+      if (openSnapBtn) {
+        openSnapBtn.style.display = ice.manifest_list ? "inline-flex" : "none";
+      }
+
+      // Manifest files list (for catalog_table)
+      if (sbManifestsSection) {
+        if (ice.manifests && Array.isArray(ice.manifests) && ice.manifests.length > 0) {
+          sbManifestsSection.style.display = "flex";
+          document.getElementById("sbManifestsCount").textContent = ice.manifests.length;
+          document.getElementById("sbManifestsList").innerHTML = ice.manifests.map(m => `
+            <div class="sidebar-part-item clickable" onclick="openLinkedPath('${escapeAttr(m.manifest_path)}')" title="点击打开清单文件: ${escapeAttr(m.manifest_path)}">
+              <div class="sidebar-part-name" style="color: var(--accent);">🧊 ${escapeHtml(m.name)}</div>
+              <div class="sidebar-part-size">${escapeHtml(m.content)} • Seq ${m.sequence_number ?? '-'} • ${escapeHtml(m.size_formatted)}</div>
+            </div>
+          `).join("");
+        } else {
+          sbManifestsSection.style.display = "none";
+        }
+      }
     } else {
       sbIcebergSection.style.display = "none";
+      if (sbManifestsSection) sbManifestsSection.style.display = "none";
     }
   }
 
-  // Partition files
+  // Partition / Data files
   const partsSection = document.getElementById("sbPartsSection");
   const partsList = document.getElementById("sbPartsList");
+  const partsTitle = document.getElementById("sbPartsTitle");
   if (info.part_files && info.part_files.length > 0) {
     partsSection.style.display = "flex";
+    if (partsTitle) {
+      partsTitle.textContent = info.format_type === "iceberg_table" ? "Parquet 数据文件" : "分片文件";
+    }
     document.getElementById("sbPartsCount").textContent = info.part_files.length;
     let partsHtml = "";
     for (const pf of info.part_files) {
+      const targetFp = pf.full_path || "";
+      const clickAttr = targetFp ? `onclick="openLinkedPath('${escapeAttr(targetFp)}')"` : "";
+      const rowInfo = pf.record_count !== undefined ? ` • ${formatNumber(pf.record_count)} 行` : "";
       partsHtml += `
-        <div class="sidebar-part-item">
-          <div class="sidebar-part-name" title="${escapeAttr(pf.rel_path)}">📄 ${escapeHtml(pf.name)}</div>
-          <div class="sidebar-part-size">${escapeHtml(pf.size_formatted)}</div>
+        <div class="sidebar-part-item ${targetFp ? 'clickable' : ''}" ${clickAttr} title="${escapeAttr(pf.rel_path || pf.name)}">
+          <div class="sidebar-part-name" style="${targetFp ? 'color: var(--accent);' : ''}">📄 ${escapeHtml(pf.name)}</div>
+          <div class="sidebar-part-size">${escapeHtml(pf.size_formatted)}${escapeHtml(rowInfo)}</div>
         </div>
       `;
     }
@@ -492,13 +803,19 @@ function renderDataTable(columns, rows, elapsedMs) {
 
 }
 
-// File path helper to detect nested/linked data files
+// File path helper to detect nested/linked local or S3 data files
 function extractFilePath(raw) {
   if (!raw) return null;
   const text = typeof raw === "string" ? raw : JSON.stringify(raw);
-  const match = text.match(/(?:file:\/\/)?(\/[^\s"'<>]+\.(?:parquet|pq|avro|avsc))/i);
-  if (match) {
-    return match[1];
+  // Match s3://, s3a://, s3n:// URLs ending in .parquet/.pq/.avro/.avsc
+  const s3Match = text.match(/(s3[an]?:\/\/[^\s"'<>]+\.(?:parquet|pq|avro|avsc))/i);
+  if (s3Match) {
+    return s3Match[1];
+  }
+  // Match local /path or file:///path
+  const localMatch = text.match(/(?:file:\/\/)?(\/[^\s"'<>]+\.(?:parquet|pq|avro|avsc))/i);
+  if (localMatch) {
+    return localMatch[1];
   }
   return null;
 }
@@ -527,7 +844,7 @@ function renderTableCell(val, colName) {
   if (targetPath) {
     const fileName = targetPath.split("/").pop();
     return `<td class="cell-clickable" onclick="inspectCell('${escapeAttr(colName)}', ${escapeAttr(JSON.stringify(str))})" title="点击查看详情或直接打开文件">
-      <span class="cell-file-link" onclick="event.stopPropagation(); loadParquetFile('${escapeAttr(targetPath)}')">📄 ${escapeHtml(fileName)}</span>
+      <span class="cell-file-link" onclick="event.stopPropagation(); openLinkedPath('${escapeAttr(targetPath)}')">📄 ${escapeHtml(fileName)}</span>
     </td>`;
   }
 
@@ -575,7 +892,7 @@ function openInspectedFile() {
   if (inspectedFilePath) {
     const p = inspectedFilePath;
     closeCellModal();
-    loadParquetFile(p);
+    openLinkedPath(p);
   }
 }
 
@@ -642,11 +959,12 @@ function updatePaginationUI() {
 
 // Render Schema View
 function renderSchemaView(info) {
+  const isIceberg = Boolean(info.iceberg_info && info.iceberg_info.is_iceberg);
   // 1. Iceberg underlying table schema
   const iceCard = document.getElementById("icebergTableCard");
   const iceTbody = document.getElementById("icebergTableTbody");
   const iceDDL = document.getElementById("icebergDDLCode");
-  if (info.iceberg_info && info.iceberg_info.table_schema && info.iceberg_info.table_schema.fields) {
+  if (isIceberg && info.iceberg_info.table_schema && info.iceberg_info.table_schema.fields) {
     iceCard.style.display = "block";
     let iceHtml = "";
     for (const f of info.iceberg_info.table_schema.fields) {
@@ -672,14 +990,14 @@ function renderSchemaView(info) {
   const colCardTitle = document.getElementById("schemaColCardTitle");
   if (colCardTitle) {
     colCardTitle.textContent = info.format_type === "avro"
-      ? (info.iceberg_info ? "Iceberg Avro 文件物理字段结构" : "Avro 文件物理字段结构")
-      : "列定义列表";
+      ? (isIceberg ? "Iceberg Avro 文件物理字段结构" : "Avro 文件物理字段结构")
+      : (info.format_type === "iceberg_table" ? "Iceberg 表物理字段映射 (PyArrow / Spark)" : "列定义列表");
   }
   const sparkCardTitle = document.getElementById("sparkDDLCardTitle");
   if (sparkCardTitle) {
     sparkCardTitle.textContent = info.format_type === "avro"
       ? "Spark SQL 建表 DDL (USING AVRO)"
-      : "Spark SQL 建表 DDL (直接在 Spark / Hive 中使用)";
+      : (info.format_type === "iceberg_table" ? "Spark / Iceberg 建表 DDL (USING ICEBERG)" : "Spark SQL 建表 DDL (直接在 Spark / Hive 中使用)");
   }
 
   const tbody = document.getElementById("schemaTbody");
@@ -714,7 +1032,7 @@ function copyIcebergDDL() {
 function getTypeBadgeClass(typeStr) {
   const t = typeStr.toLowerCase();
   if (t.includes("string") || t.includes("utf8")) return "type-string";
-  if (t.includes("int")) return "type-int";
+  if (t.includes("int") || t.includes("long")) return "type-int";
   if (t.includes("double") || t.includes("float") || t.includes("decimal")) return "type-double";
   if (t.includes("bool")) return "type-bool";
   if (t.includes("list") || t.includes("struct") || t.includes("map") || t.includes("array")) return "type-complex";
@@ -751,7 +1069,10 @@ function renderMetadataView(info) {
   document.getElementById("metaTotalRows").textContent = formatNumber(info.total_rows);
   document.getElementById("metaNumCols").textContent = info.num_columns;
   document.getElementById("metaFileSize").textContent = info.file_size_formatted;
-  document.getElementById("metaFileCountDesc").textContent = info.is_dir ? `目录包含 ${info.file_count} 个分片文件` : "单文件";
+  document.getElementById("metaFileCountDesc").textContent =
+    info.format_type === "iceberg_table"
+      ? `表共包含 ${info.file_count} 个活跃 Parquet 数据文件`
+      : (info.is_dir ? `目录包含 ${info.file_count} 个分片文件` : "单文件");
   document.getElementById("metaNumRowGroups").textContent = info.num_row_groups;
   document.getElementById("metaCreatedBy").textContent = info.created_by;
   document.getElementById("metaFormatVersion").textContent = `v${info.format_version || '2'}`;
@@ -761,8 +1082,9 @@ function renderMetadataView(info) {
   const seqCard = document.getElementById("metaIcebergSeqCard");
   const specCard = document.getElementById("metaIcebergSpecCard");
   const iceMetaCard = document.getElementById("icebergMetaCard");
+  const isIceberg = Boolean(info.iceberg_info && info.iceberg_info.is_iceberg);
 
-  if (info.iceberg_info) {
+  if (isIceberg) {
     const ice = info.iceberg_info;
     if (ice.snapshot_id) {
       snapCard.style.display = "flex";
@@ -772,7 +1094,7 @@ function renderMetadataView(info) {
       snapCard.style.display = "none";
     }
 
-    if (ice.sequence_number) {
+    if (ice.sequence_number !== undefined && ice.sequence_number !== null) {
       seqCard.style.display = "flex";
       document.getElementById("metaIcebergSeqNum").textContent = ice.sequence_number;
     } else {
@@ -800,7 +1122,7 @@ function renderMetadataView(info) {
   if (info.spark_metadata) {
     sparkJsonBox.textContent = typeof info.spark_metadata === "object" ? JSON.stringify(info.spark_metadata, null, 2) : info.spark_metadata;
   } else {
-    sparkJsonBox.textContent = "未检测到 Spark row metadata (标准存储)";
+    sparkJsonBox.textContent = "未检测到附加表属性或 Spark row metadata";
   }
 }
 
@@ -814,7 +1136,7 @@ function setQueryRunning(running) {
 async function executeSqlQuery() {
   if (isQueryRunning) return;
   if (!currentFilePath) {
-    showToast("请先打开一个 Parquet 文件", "warning");
+    showToast("请先打开一个文件或 Iceberg 表", "warning");
     return;
   }
   const sql = document.getElementById("sqlEditor").value.trim();
@@ -905,14 +1227,16 @@ function initRecentFiles() {
     return;
   }
 
-  if (badge) badge.textContent = `${recents.length} 个文件`;
+  if (badge) badge.textContent = `${recents.length} 条记录`;
   list.innerHTML = "";
   recents.forEach(item => {
+    const isIce = item.path.startsWith("iceberg://");
+    const icon = isIce ? "🧊" : "📄";
     const el = document.createElement("div");
     el.className = "welcome-recent-item";
     el.innerHTML = `
       <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-        <span style="font-size: 14px;">📄</span>
+        <span style="font-size: 14px;">${icon}</span>
         <div style="min-width: 0;">
           <div class="welcome-recent-item-name">${escapeHtml(item.name)}</div>
           <div class="welcome-recent-item-path" title="${escapeAttr(item.path)}">${escapeHtml(item.path)}</div>
@@ -920,7 +1244,11 @@ function initRecentFiles() {
       </div>
       <span style="font-size: 11px; color: var(--accent); flex-shrink: 0;">打开 ›</span>
     `;
-    el.onclick = () => loadParquetFile(item.path);
+    el.onclick = () => {
+      navigationStack.length = 0;
+      updateBackButtonUI();
+      loadParquetFile(item.path);
+    };
     list.appendChild(el);
   });
 }
@@ -936,7 +1264,7 @@ function getRecentFiles() {
 function saveRecentFile(path, name) {
   let recents = getRecentFiles().filter(item => item.path !== path);
   recents.unshift({ path, name, timestamp: Date.now() });
-  recents = recents.slice(0, 5);
+  recents = recents.slice(0, 6);
   localStorage.setItem("pv_recent_files", JSON.stringify(recents));
   initRecentFiles();
 }

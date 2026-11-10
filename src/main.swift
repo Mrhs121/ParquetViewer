@@ -55,7 +55,7 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
             handleExportDialog(reqId: reqId, dict: dict)
         case "getSamplePath":
             handleGetSamplePath(reqId: reqId, dict: dict)
-        case "info", "page", "query":
+        case "catalog_namespaces", "info", "page", "query":
             handleEngineCommand(action: action, reqId: reqId, dict: dict)
         default:
             sendResponse(reqId: reqId, success: false, dataJson: "{}", error: "未知操作: \(action)")
@@ -121,10 +121,11 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
             return
         }
         let sql = dict["sql"] as? String ?? "SELECT * FROM data"
+        let catalogConfig = dict["catalogConfig"] as? String
 
         DispatchQueue.main.async {
             let panel = NSSavePanel()
-            panel.title = "导出 Parquet 数据"
+            panel.title = "导出数据"
             panel.prompt = "导出"
             panel.nameFieldStringValue = "export.csv"
             panel.allowedContentTypes = []
@@ -135,7 +136,7 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
                 let format = (ext == "json") ? "json" : ((ext == "parquet" || ext == "pq") ? "parquet" : "csv")
 
                 DispatchQueue.global(qos: .userInitiated).async {
-                    self.executePython(args: ["export", path, format, destPath, sql]) { output, error in
+                    self.executePython(args: ["export", path, format, destPath, sql], catalogConfig: catalogConfig) { output, error in
                         if let output = output, error == nil {
                             self.sendResponse(reqId: reqId, success: true, dataJson: output)
                         } else {
@@ -150,6 +151,22 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
     }
 
     private func handleEngineCommand(action: String, reqId: String, dict: [String: Any]) {
+        let catalogConfig = dict["catalogConfig"] as? String
+
+        if action == "catalog_namespaces" {
+            let cfgArg = catalogConfig ?? "__NONE__"
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.executePython(args: ["catalog_namespaces", cfgArg], catalogConfig: catalogConfig) { output, error in
+                    if let output = output, error == nil {
+                        self.sendResponse(reqId: reqId, success: true, dataJson: output)
+                    } else {
+                        self.sendResponse(reqId: reqId, success: false, dataJson: "{}", error: error ?? "连接 Catalog 失败")
+                    }
+                }
+            }
+            return
+        }
+
         guard let path = dict["path"] as? String else {
             sendResponse(reqId: reqId, success: false, dataJson: "{}", error: "缺少路径参数")
             return
@@ -172,7 +189,7 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            self.executePython(args: args) { output, error in
+            self.executePython(args: args, catalogConfig: catalogConfig) { output, error in
                 if let output = output, error == nil {
                     self.sendResponse(reqId: reqId, success: true, dataJson: output)
                 } else {
@@ -182,7 +199,7 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
         }
     }
 
-    private func executePython(args: [String], completion: @escaping (String?, String?) -> Void) {
+    private func executePython(args: [String], catalogConfig: String? = nil, completion: @escaping (String?, String?) -> Void) {
         let process = Process()
         let pipe = Pipe()
         let errPipe = Pipe()
@@ -227,6 +244,11 @@ class ParquetBridgeHandler: NSObject, WKScriptMessageHandler {
 
         process.executableURL = URL(fileURLWithPath: pythonPath)
         process.arguments = [validScript] + args
+        if let catalogConfig = catalogConfig, !catalogConfig.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            env["PQ_CATALOG_CONFIG"] = catalogConfig
+            process.environment = env
+        }
         process.standardOutput = pipe
         process.standardError = errPipe
         let exited = DispatchSemaphore(value: 0)
@@ -490,6 +512,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let openItem = NSMenuItem(title: "打开 Parquet / Iceberg Avro 文件...", action: #selector(menuOpenFile), keyEquivalent: "o")
         openItem.target = self
         fileMenu.addItem(openItem)
+        let catalogItem = NSMenuItem(title: "连接远程 Iceberg REST Catalog...", action: #selector(menuOpenCatalog), keyEquivalent: "k")
+        catalogItem.target = self
+        fileMenu.addItem(catalogItem)
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
@@ -529,6 +554,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         if panel.runModal() == .OK, let url = panel.url {
             openFileFromPath(url.path)
+        }
+    }
+
+    @objc func menuOpenCatalog() {
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("window.openCatalogModal?.();", completionHandler: nil)
         }
     }
 
